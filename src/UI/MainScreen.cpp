@@ -3,6 +3,7 @@
 #include "Components/StatusBar.hpp"
 #include "NavigationSidebar.hpp"
 #include "State/Reducer.hpp"
+#include "UI/UIHelpers.hpp"
 #include "Views/AuthModal.hpp"
 #include "Views/CreateTaskView.hpp"
 #include "Views/ReviewView.hpp"
@@ -91,6 +92,9 @@ MainScreen::~MainScreen() {
     if (_healthChecker) {
         _healthChecker->Stop();
     }
+    if (_eventSubscriber) {
+        _eventSubscriber->Stop();
+    }
 }
 
 void MainScreen::InitState() {
@@ -129,6 +133,99 @@ void MainScreen::StartHealthMonitoring() {
             }
         });
     _healthChecker->Start();
+}
+
+void MainScreen::StartEventSubscription() {
+    if (!_backendClient) {
+        return;
+    }
+    if (_eventSubscriber) {
+        _eventSubscriber->Stop();
+    }
+    _eventSubscriber = std::make_unique<Grpc::EventSubscriber>(
+        _backendClient,
+        [this](const aquarium::api::TaskEvent& event) {
+            HandleTaskEvent(event);
+        },
+        [this] { FetchInitialData(); });
+    _eventSubscriber->Start();
+}
+
+void MainScreen::HandleTaskEvent(const aquarium::api::TaskEvent& event) {
+    using aquarium::api::TaskEvent;
+    switch (event.type()) {
+    case TaskEvent::TASK_CREATED:
+        if (event.has_task()) {
+            Dispatch(State::TaskCreatedAction{event.task()});
+        }
+        Dispatch(State::ShowToastAction{
+            .message = "Task #" + std::to_string(event.taskid()) + " created",
+            .severity = State::ToastSeverity::Info,
+        });
+        break;
+
+    case TaskEvent::TASK_UPDATED:
+    case TaskEvent::WORKER_ASSIGNED:
+    case TaskEvent::WORKER_REMOVED:
+        if (event.has_task()) {
+            Dispatch(State::TaskUpdatedAction{event.task()});
+        }
+        Dispatch(State::ShowToastAction{
+            .message = "Task #" + std::to_string(event.taskid()) + " updated",
+            .severity = State::ToastSeverity::Info,
+        });
+        break;
+
+    case TaskEvent::STATUS_CHANGED:
+        if (event.has_task()) {
+            Dispatch(State::TaskUpdatedAction{event.task()});
+            Dispatch(State::ShowToastAction{
+                .message = "Task #" + std::to_string(event.taskid()) +
+                           " moved to " +
+                           GetStatusBadge(event.task().status()).text,
+                .severity = State::ToastSeverity::Info,
+            });
+        }
+        break;
+
+    case TaskEvent::TASK_REJECTED:
+        if (event.has_task()) {
+            aquarium::api::Comment c = event.has_comment()
+                                           ? event.comment()
+                                           : aquarium::api::Comment{};
+            Dispatch(State::TaskRejectedAction{
+                .task = event.task(),
+                .comment = c,
+            });
+        }
+        Dispatch(State::ShowToastAction{
+            .message = "Task #" + std::to_string(event.taskid()) +
+                       " rejected for revision",
+            .severity = State::ToastSeverity::Warning,
+        });
+        break;
+
+    case TaskEvent::COMMENT_ADDED:
+        if (event.has_comment()) {
+            Dispatch(State::CommentAddedAction{event.comment()});
+        }
+        Dispatch(State::ShowToastAction{
+            .message = "New remark on task #" + std::to_string(event.taskid()),
+            .severity = State::ToastSeverity::Info,
+        });
+        break;
+
+    case TaskEvent::TASK_DELETED:
+        Dispatch(State::TaskDeletedAction{event.taskid()});
+        Dispatch(State::ShowToastAction{
+            .message = "Task #" + std::to_string(event.taskid()) + " deleted",
+            .severity = State::ToastSeverity::Info,
+        });
+        break;
+
+    default:
+        break;
+    }
 }
 
 void MainScreen::Dispatch(const Action& action) {
@@ -228,6 +325,7 @@ void MainScreen::HandleAuthSubmit(const std::string& server,
             .severity = State::ToastSeverity::Success,
         });
         FetchInitialData();
+        StartEventSubscription();
     } else {
         Dispatch(State::ShowToastAction{
             .message = "Registration failed: " + res.Error().message,
@@ -303,6 +401,7 @@ Component MainScreen::BuildLayout() {
 
 void MainScreen::Run() {
     StartHealthMonitoring();
+    StartEventSubscription();
     FetchInitialData();
     auto rootComponent = BuildLayout();
     _screen.Loop(rootComponent);

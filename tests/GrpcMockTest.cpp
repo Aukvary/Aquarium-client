@@ -1,5 +1,6 @@
 #include "Common/Types.hpp"
 #include "Grpc/BackendClient.hpp"
+#include "Grpc/EventSubscriber.hpp"
 #include "Grpc/HealthChecker.hpp"
 
 #include <chrono>
@@ -228,6 +229,26 @@ public:
         comment->set_type(CommentType::COMMENT_REVISION_REASON);
         return grpc::Status::OK;
     }
+
+    grpc::Status
+    SubscribeEvents(grpc::ServerContext* context,
+                    const SubscribeEventsRequest* /*request*/,
+                    grpc::ServerWriter<TaskEvent>* writer) override {
+        TaskEvent ev;
+        ev.set_type(TaskEvent::TASK_CREATED);
+        ev.set_taskid(101);
+        auto* task = ev.mutable_task();
+        task->set_id(101);
+        task->set_title("Live streamed task");
+        task->set_status(TaskStatus::ACTIVE);
+
+        writer->Write(ev);
+
+        while (!context->IsCancelled()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        return grpc::Status::OK;
+    }
 };
 
 // --- Test Fixture ---
@@ -440,6 +461,34 @@ TEST_F(BackendClientTest, PeriodicHealthCheckerLifecycle) {
 
     checker.Stop();
     EXPECT_FALSE(checker.IsRunning());
+}
+
+TEST_F(BackendClientTest, EventSubscriberReceivesLiveEvents) {
+    std::atomic<bool> receivedEvent{false};
+    std::atomic<int64_t> receivedTaskId{0};
+
+    EventSubscriber subscriber(_client, [&](const TaskEvent& event) {
+        if (event.type() == TaskEvent::TASK_CREATED) {
+            receivedTaskId = event.taskid();
+            receivedEvent = true;
+        }
+    });
+
+    subscriber.Start();
+    EXPECT_TRUE(subscriber.IsRunning());
+
+    for (int i = 0; i < 50; ++i) {
+        if (receivedEvent.load()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    EXPECT_TRUE(receivedEvent.load());
+    EXPECT_EQ(receivedTaskId.load(), 101);
+
+    subscriber.Stop();
+    EXPECT_FALSE(subscriber.IsRunning());
 }
 
 } // namespace Aquarium::Grpc::Tests

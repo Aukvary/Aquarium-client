@@ -48,6 +48,9 @@ public:
         std::chrono::milliseconds timeout = std::chrono::milliseconds(5000),
         const std::string& customInviteKey = "") const;
 
+    [[nodiscard]] std::unique_ptr<grpc::ClientContext>
+    CreateStreamContext() const;
+
     // UtilsService RPCs
     [[nodiscard]] Result<aquarium::api::HealthResponse>
     Health(std::chrono::milliseconds timeout = std::chrono::milliseconds(3000));

@@ -113,6 +113,7 @@ add_library(
   src/Config/ConfigManager.cpp
   src/Grpc/BackendClient.cpp
   src/Grpc/HealthChecker.cpp
+  src/Grpc/EventSubscriber.cpp
   src/State/Reducer.cpp
   src/UI/Components/StatusBar.cpp
   src/UI/Components/TaskDetailsPane.cpp

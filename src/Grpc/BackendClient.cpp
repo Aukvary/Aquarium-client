@@ -97,8 +97,10 @@ std::unique_ptr<grpc::ClientContext>
 BackendClient::CreateContext(std::chrono::milliseconds timeout,
                              const std::string& customInviteKey) const {
     auto context = std::make_unique<grpc::ClientContext>();
-    auto deadline = std::chrono::system_clock::now() + timeout;
-    context->set_deadline(deadline);
+    if (timeout > std::chrono::milliseconds::zero()) {
+        auto deadline = std::chrono::system_clock::now() + timeout;
+        context->set_deadline(deadline);
+    }
 
     if (!_authToken.empty()) {
         context->AddMetadata("authorization", "Bearer " + _authToken);
@@ -108,6 +110,11 @@ BackendClient::CreateContext(std::chrono::milliseconds timeout,
     }
 
     return context;
+}
+
+std::unique_ptr<grpc::ClientContext>
+BackendClient::CreateStreamContext() const {
+    return CreateContext(std::chrono::milliseconds::zero());
 }
 
 Result<aquarium::api::HealthResponse>

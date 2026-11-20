@@ -2,6 +2,7 @@
 
 #include "Config/ConfigManager.hpp"
 #include "Grpc/BackendClient.hpp"
+#include "Grpc/EventSubscriber.hpp"
 #include "Grpc/HealthChecker.hpp"
 #include "State/Actions.hpp"
 #include "State/AppState.hpp"
@@ -31,6 +32,8 @@ public:
 private:
     void InitState();
     void StartHealthMonitoring();
+    void StartEventSubscription();
+    void HandleTaskEvent(const aquarium::api::TaskEvent& event);
     void FetchInitialData();
     void HandleAuthSubmit(const std::string& server,
                           const std::string& name,
@@ -42,6 +45,7 @@ private:
     std::shared_ptr<Config::ConfigManager> _configManager;
     std::shared_ptr<Grpc::BackendClient> _backendClient;
     std::unique_ptr<Grpc::HealthChecker> _healthChecker;
+    std::unique_ptr<Grpc::EventSubscriber> _eventSubscriber;
 
     State::AppState _state;
     ftxui::ScreenInteractive _screen;
