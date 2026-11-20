@@ -110,7 +110,9 @@ target_link_libraries(aquarium-client-proto PUBLIC protobuf::libprotobuf
 # Core Client Library
 add_library(
   aquarium-client-core STATIC
-  src/Config/ConfigManager.cpp)
+  src/Config/ConfigManager.cpp
+  src/Grpc/BackendClient.cpp
+  src/Grpc/HealthChecker.cpp)
 
 target_include_directories(aquarium-client-core
                            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
