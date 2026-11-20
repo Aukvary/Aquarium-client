@@ -119,6 +119,8 @@ add_library(
   src/UI/Components/RemarksPane.cpp
   src/UI/NavigationSidebar.cpp
   src/UI/Views/TaskBoardView.cpp
+  src/UI/Views/ReviewView.cpp
+  src/UI/Views/CreateTaskView.cpp
   src/UI/Views/AuthModal.cpp
   src/UI/MainScreen.cpp)
 

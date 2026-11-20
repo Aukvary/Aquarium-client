@@ -1,9 +1,12 @@
+#include "Common/TimeUtils.hpp"
 #include "State/AppState.hpp"
 #include "UI/Components/RemarksPane.hpp"
 #include "UI/Components/StatusBar.hpp"
 #include "UI/Components/TaskDetailsPane.hpp"
 #include "UI/NavigationSidebar.hpp"
 #include "UI/Views/AuthModal.hpp"
+#include "UI/Views/CreateTaskView.hpp"
+#include "UI/Views/ReviewView.hpp"
 #include "UI/Views/TaskBoardView.hpp"
 
 #include <chrono>
@@ -284,6 +287,87 @@ TEST(UiComponentsTest, AuthModalRendersAndValidates) {
     // Pressing Escape triggers cancel
     EXPECT_TRUE(comp->OnEvent(Event::Escape));
     EXPECT_TRUE(cancelled);
+}
+
+TEST(UiComponentsTest, ReviewViewRendersInReviewTasksAndActions) {
+    AppState state;
+    Task t1;
+    t1.set_id(1);
+    t1.set_title("Active task");
+    t1.set_status(TaskStatus::ACTIVE);
+
+    Task t2;
+    t2.set_id(2);
+    t2.set_title("PR needs review");
+    t2.set_status(TaskStatus::IN_REVIEW);
+
+    state.tasks = {t1, t2};
+    state.selectedTaskId = 2;
+
+    auto comp =
+        Views::CreateReviewView(state, [](const State::Action&) {}, nullptr);
+    auto elem = comp->Render();
+    auto screen = Screen::Create(Dimension::Fixed(160), Dimension::Fixed(25));
+    Render(screen, elem);
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("IN REVIEW (1)"), std::string::npos);
+    EXPECT_NE(rendered.find("#2"), std::string::npos);
+    EXPECT_NE(rendered.find("PR needs review"), std::string::npos);
+    EXPECT_NE(rendered.find("REVIEW ACTIONS"), std::string::npos);
+    EXPECT_NE(rendered.find("Approve & Verify"), std::string::npos);
+    EXPECT_NE(rendered.find("Return for Revision:"), std::string::npos);
+    EXPECT_NE(rendered.find("Reject with Reason"), std::string::npos);
+    EXPECT_NE(rendered.find("REMARKS & HISTORY"), std::string::npos);
+}
+
+TEST(UiComponentsTest, CreateTaskViewRendersFormAndHandlesValidation) {
+    AppState state;
+    User u;
+    u.set_id(1);
+    u.set_name("Developer");
+    state.users = {u};
+
+    bool navigatedBack = false;
+    auto dispatch = [&](const State::Action& a) {
+        if (std::holds_alternative<State::NavigateToViewAction>(a)) {
+            navigatedBack = true;
+        }
+    };
+
+    auto comp = Views::CreateCreateTaskView(state, dispatch, nullptr);
+    auto elem = comp->Render();
+    auto screen = Screen::Create(Dimension::Fixed(100), Dimension::Fixed(30));
+    Render(screen, elem);
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("CREATE NEW TASK"), std::string::npos);
+    EXPECT_NE(rendered.find("Title:"), std::string::npos);
+    EXPECT_NE(rendered.find("Description:"), std::string::npos);
+    EXPECT_NE(rendered.find("Worker IDs:"), std::string::npos);
+    EXPECT_NE(rendered.find("Available Team Members: [1] Developer"),
+              std::string::npos);
+    EXPECT_NE(rendered.find("Checker ID:"), std::string::npos);
+    EXPECT_NE(rendered.find("Status:"), std::string::npos);
+    EXPECT_NE(rendered.find("Due Date:"), std::string::npos);
+    EXPECT_NE(rendered.find("Create Task"), std::string::npos);
+    EXPECT_NE(rendered.find("Cancel"), std::string::npos);
+
+    // Escape triggers navigation back
+    EXPECT_TRUE(comp->OnEvent(Event::Escape));
+    EXPECT_TRUE(navigatedBack);
+}
+
+TEST(UiComponentsTest, TimeUtilsParseDate) {
+    auto valid = Common::ParseDate("2026-11-20");
+    ASSERT_TRUE(valid.has_value());
+    EXPECT_GT(valid->seconds(), 0);
+
+    auto invalid = Common::ParseDate("not-a-date");
+    EXPECT_FALSE(invalid.has_value());
+
+    auto empty = Common::ParseDate("");
+    EXPECT_FALSE(empty.has_value());
 }
 
 } // namespace Aquarium::UI::Tests

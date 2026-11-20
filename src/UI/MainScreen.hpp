@@ -38,7 +38,6 @@ private:
 
     [[nodiscard]] ftxui::Component BuildLayout();
     [[nodiscard]] ftxui::Element RenderHeader() const;
-    [[nodiscard]] ftxui::Element RenderWorkspace() const;
 
     std::shared_ptr<Config::ConfigManager> _configManager;
     std::shared_ptr<Grpc::BackendClient> _backendClient;
@@ -47,6 +46,7 @@ private:
     State::AppState _state;
     ftxui::ScreenInteractive _screen;
     bool _showAuthModal{false};
+    int _activeTabIndex{0};
 };
 
 } // namespace Aquarium::UI

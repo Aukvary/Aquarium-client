@@ -4,6 +4,8 @@
 #include "NavigationSidebar.hpp"
 #include "State/Reducer.hpp"
 #include "Views/AuthModal.hpp"
+#include "Views/CreateTaskView.hpp"
+#include "Views/ReviewView.hpp"
 #include "Views/TaskBoardView.hpp"
 
 #include <chrono>
@@ -20,6 +22,62 @@ using namespace ftxui;
 using State::Action;
 using State::Reducer;
 using State::ViewType;
+
+namespace {
+
+class GlobalEventFilter : public ComponentBase {
+public:
+    GlobalEventFilter(Component child,
+                      std::function<void()> onQuit,
+                      std::function<void(ViewType)> onNavigate,
+                      std::function<void()> onEscape)
+        : _onQuit(std::move(onQuit)), _onNavigate(std::move(onNavigate)),
+          _onEscape(std::move(onEscape)) {
+        Add(std::move(child));
+    }
+
+    bool OnEvent(Event event) override {
+        if (event == Event::Character('\x03')) {
+            _onQuit();
+            return true;
+        }
+
+        // Let active child (e.g. Input, Button) process event first
+        if (ComponentBase::OnEvent(event)) {
+            return true;
+        }
+
+        // Child did not consume event: check global hotkeys
+        if (event == Event::Character('q')) {
+            _onQuit();
+            return true;
+        }
+        if (event == Event::Character('1')) {
+            _onNavigate(ViewType::Tasks);
+            return true;
+        }
+        if (event == Event::Character('2')) {
+            _onNavigate(ViewType::Review);
+            return true;
+        }
+        if (event == Event::Character('3')) {
+            _onNavigate(ViewType::CreateTask);
+            return true;
+        }
+        if (event == Event::Escape) {
+            _onEscape();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    std::function<void()> _onQuit;
+    std::function<void(ViewType)> _onNavigate;
+    std::function<void()> _onEscape;
+};
+
+} // namespace
 
 MainScreen::MainScreen(std::shared_ptr<Config::ConfigManager> configManager,
                        std::shared_ptr<Grpc::BackendClient> backendClient)
@@ -77,6 +135,7 @@ void MainScreen::Dispatch(const Action& action) {
     _screen.Post([this, action] {
         _state = Reducer::Reduce(_state, action);
         _showAuthModal = (_state.activeModal == State::ModalType::AuthModal);
+        _activeTabIndex = static_cast<int>(_state.currentView);
     });
     _screen.PostEvent(Event::Custom);
 }
@@ -106,33 +165,6 @@ Element MainScreen::RenderHeader() const {
                filler(),
            }) |
            border;
-}
-
-Element MainScreen::RenderWorkspace() const {
-    switch (_state.currentView) {
-    case ViewType::Tasks:
-        return text("");
-
-    case ViewType::Review:
-        return vbox({
-                   text("Review Workspace") | bold | center,
-                   separator(),
-                   text("Phase 8 will provide task approval and revision "
-                        "workflow.") |
-                       dim | center,
-               }) |
-               border | flex;
-
-    case ViewType::CreateTask:
-        return vbox({
-                   text("Create Task Workspace") | bold | center,
-                   separator(),
-                   text("Phase 8 will provide task authoring form.") | dim |
-                       center,
-               }) |
-               border | flex;
-    }
-    return text("Unknown view") | border | flex;
 }
 
 void MainScreen::FetchInitialData() {
@@ -215,20 +247,20 @@ Component MainScreen::BuildLayout() {
         _state, [this](const State::Action& a) { Dispatch(a); },
         _backendClient);
 
-    auto workspaceRenderer = Renderer([this, taskBoard] {
-        switch (_state.currentView) {
-        case ViewType::Tasks:
-            return taskBoard->Render();
-        case ViewType::Review:
-        case ViewType::CreateTask:
-            return RenderWorkspace();
-        }
-        return text("Unknown view") | border | flex;
-    });
+    auto reviewView = Views::CreateReviewView(
+        _state, [this](const State::Action& a) { Dispatch(a); },
+        _backendClient);
+
+    auto createTaskView = Views::CreateCreateTaskView(
+        _state, [this](const State::Action& a) { Dispatch(a); },
+        _backendClient);
+
+    auto tabWorkspace = Container::Tab({taskBoard, reviewView, createTaskView},
+                                       &_activeTabIndex);
 
     auto middleContainer = Container::Horizontal({
         sidebar,
-        taskBoard,
+        tabWorkspace,
     });
 
     auto rootContainer = Container::Vertical({
@@ -237,12 +269,12 @@ Component MainScreen::BuildLayout() {
     });
 
     auto layoutRenderer =
-        Renderer(rootContainer, [this, sidebar, workspaceRenderer, statusBar] {
+        Renderer(rootContainer, [this, sidebar, tabWorkspace, statusBar] {
             return vbox({
                 RenderHeader(),
                 hbox({
                     sidebar->Render(),
-                    workspaceRenderer->Render() | flex,
+                    tabWorkspace->Render() | flex,
                 }) | flex,
                 separator(),
                 statusBar->Render(),
@@ -260,31 +292,13 @@ Component MainScreen::BuildLayout() {
 
     auto modalContainer = Modal(layoutRenderer, authModal, &_showAuthModal);
 
-    return CatchEvent(modalContainer, [this](Event event) {
-        if (event == Event::Character('q') ||
-            event == Event::Character('\x03')) {
-            _screen.ExitLoopClosure()();
-            return true;
-        }
-        if (event == Event::Character('1')) {
-            Dispatch(State::NavigateToViewAction{ViewType::Tasks});
-            return true;
-        }
-        if (event == Event::Character('2')) {
-            Dispatch(State::NavigateToViewAction{ViewType::Review});
-            return true;
-        }
-        if (event == Event::Character('3')) {
-            Dispatch(State::NavigateToViewAction{ViewType::CreateTask});
-            return true;
-        }
-        if (event == Event::Escape) {
+    return Make<GlobalEventFilter>(
+        modalContainer, [this] { _screen.ExitLoopClosure()(); },
+        [this](ViewType v) { Dispatch(State::NavigateToViewAction{v}); },
+        [this] {
             Dispatch(State::CloseModalAction{});
             Dispatch(State::DismissToastAction{});
-            return true;
-        }
-        return false;
-    });
+        });
 }
 
 void MainScreen::Run() {
