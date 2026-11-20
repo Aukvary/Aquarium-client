@@ -112,7 +112,8 @@ add_library(
   aquarium-client-core STATIC
   src/Config/ConfigManager.cpp
   src/Grpc/BackendClient.cpp
-  src/Grpc/HealthChecker.cpp)
+  src/Grpc/HealthChecker.cpp
+  src/State/Reducer.cpp)
 
 target_include_directories(aquarium-client-core
                            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
