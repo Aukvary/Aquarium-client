@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
+
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
+
 project(aquarium-client CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -19,7 +24,8 @@ include(FetchContent)
 FetchContent_Declare(
   ftxui
   GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
-  GIT_TAG v7.0.3)
+  GIT_TAG v5.0.0
+  GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(ftxui)
 
 # nlohmann_json
@@ -27,8 +33,7 @@ find_package(nlohmann_json CONFIG QUIET)
 if(NOT nlohmann_json_FOUND)
   FetchContent_Declare(
     nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3)
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz)
   FetchContent_MakeAvailable(nlohmann_json)
 endif()
 
@@ -38,12 +43,13 @@ if(NOT GTest_FOUND)
   FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.14.0)
+    GIT_TAG v1.14.0
+    GIT_SHALLOW TRUE)
   FetchContent_MakeAvailable(googletest)
 endif()
 
 # Protobuf & gRPC
-find_package(Protobuf REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 
 # Proto Generation from Aquarium-server/proto
