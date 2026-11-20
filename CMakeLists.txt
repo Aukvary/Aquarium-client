@@ -107,6 +107,24 @@ endif()
 target_link_libraries(aquarium-client-proto PUBLIC protobuf::libprotobuf
                                                    gRPC::grpc++)
 
+# Core Client Library
+add_library(
+  aquarium-client-core STATIC
+  src/Config/ConfigManager.cpp)
+
+target_include_directories(aquarium-client-core
+                           PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+target_link_libraries(
+  aquarium-client-core
+  PUBLIC aquarium-client-proto
+         ftxui::screen
+         ftxui::dom
+         ftxui::component
+         nlohmann_json::nlohmann_json
+         gRPC::grpc++
+         protobuf::libprotobuf)
+
 # Main Client Executable
 add_executable(aquarium-client src/main.cpp)
 
@@ -115,13 +133,7 @@ target_include_directories(aquarium-client
 
 target_link_libraries(
   aquarium-client
-  PRIVATE aquarium-client-proto
-          ftxui::screen
-          ftxui::dom
-          ftxui::component
-          nlohmann_json::nlohmann_json
-          gRPC::grpc++
-          protobuf::libprotobuf)
+  PRIVATE aquarium-client-core)
 
 # Testing Targets
 enable_testing()
@@ -135,13 +147,7 @@ target_include_directories(aquarium-client-unittest
 
 target_link_libraries(
   aquarium-client-unittest
-  PRIVATE aquarium-client-proto
-          ftxui::screen
-          ftxui::dom
-          ftxui::component
-          nlohmann_json::nlohmann_json
-          gRPC::grpc++
-          protobuf::libprotobuf
+  PRIVATE aquarium-client-core
           GTest::gtest
           GTest::gtest_main)
 
