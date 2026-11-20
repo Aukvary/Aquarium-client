@@ -115,7 +115,10 @@ add_library(
   src/Grpc/HealthChecker.cpp
   src/State/Reducer.cpp
   src/UI/Components/StatusBar.cpp
+  src/UI/Components/TaskDetailsPane.cpp
+  src/UI/Components/RemarksPane.cpp
   src/UI/NavigationSidebar.cpp
+  src/UI/Views/TaskBoardView.cpp
   src/UI/MainScreen.cpp)
 
 target_include_directories(aquarium-client-core

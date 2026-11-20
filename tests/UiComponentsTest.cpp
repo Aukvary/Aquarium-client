@@ -1,6 +1,9 @@
 #include "State/AppState.hpp"
+#include "UI/Components/RemarksPane.hpp"
 #include "UI/Components/StatusBar.hpp"
+#include "UI/Components/TaskDetailsPane.hpp"
 #include "UI/NavigationSidebar.hpp"
+#include "UI/Views/TaskBoardView.hpp"
 
 #include <chrono>
 #include <ftxui/component/event.hpp>
@@ -11,6 +14,7 @@
 namespace Aquarium::UI::Tests {
 
 using namespace ftxui;
+using namespace aquarium::api;
 using State::AppState;
 using State::ConnectionStatus;
 using State::ToastMessage;
@@ -84,6 +88,163 @@ TEST(UiComponentsTest, NavigationSidebarRendersAndHandlesHotkeys) {
 
     // Unhandled event
     EXPECT_FALSE(comp->OnEvent(Event::Character('x')));
+}
+
+TEST(UiComponentsTest, TaskDetailsPaneRendersSelectedTask) {
+    AppState state;
+    Task task;
+    task.set_id(42);
+    task.set_title("Optimize SQL query indexing");
+    task.set_description("Add composite index on status and created_at.");
+    task.set_status(TaskStatus::ACTIVE);
+    task.set_authorid(1);
+    task.add_workerids(2);
+    task.set_checkerid(3);
+
+    User u1;
+    u1.set_id(1);
+    u1.set_name("Alice");
+    User u2;
+    u2.set_id(2);
+    u2.set_name("Bob");
+    User u3;
+    u3.set_id(3);
+    u3.set_name("Charlie");
+    state.users = {u1, u2, u3};
+
+    state.tasks = {task};
+    state.selectedTaskId = 42;
+
+    bool statusChanged = false;
+    bool workerAssigned = false;
+    bool taskDeleted = false;
+
+    Components::TaskDetailsCallbacks callbacks{
+        .onChangeStatus =
+            [&](std::int64_t id) {
+                EXPECT_EQ(id, 42);
+                statusChanged = true;
+            },
+        .onAssignWorker =
+            [&](std::int64_t id) {
+                EXPECT_EQ(id, 42);
+                workerAssigned = true;
+            },
+        .onDeleteTask =
+            [&](std::int64_t id) {
+                EXPECT_EQ(id, 42);
+                taskDeleted = true;
+            },
+    };
+
+    auto comp = Components::CreateTaskDetailsPane(state, callbacks);
+    auto elem = comp->Render();
+    auto screen = Screen::Create(Dimension::Fixed(80), Dimension::Fixed(20));
+    Render(screen, elem);
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("#42"), std::string::npos);
+    EXPECT_NE(rendered.find("Optimize SQL query indexing"), std::string::npos);
+    EXPECT_NE(rendered.find("[ACTIVE]"), std::string::npos);
+    EXPECT_NE(rendered.find("Alice"), std::string::npos);
+    EXPECT_NE(rendered.find("Bob"), std::string::npos);
+    EXPECT_NE(rendered.find("Charlie"), std::string::npos);
+    EXPECT_NE(rendered.find("Add composite index"), std::string::npos);
+    EXPECT_NE(rendered.find("Change Status"), std::string::npos);
+}
+
+TEST(UiComponentsTest, TaskDetailsPaneEmptyState) {
+    AppState state;
+    state.selectedTaskId = std::nullopt;
+
+    auto comp = Components::CreateTaskDetailsPane(state);
+    auto elem = comp->Render();
+    auto screen = Screen::Create(Dimension::Fixed(60), Dimension::Fixed(10));
+    Render(screen, elem);
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("Select a task from the list"), std::string::npos);
+}
+
+TEST(UiComponentsTest, RemarksPaneRendersCategorizedFeed) {
+    AppState state;
+    state.selectedTaskId = 10;
+
+    Comment c1;
+    c1.set_id(1);
+    c1.set_taskid(10);
+    c1.set_content("General comment text");
+    c1.set_type(CommentType::COMMENT_GENERAL);
+
+    Comment c2;
+    c2.set_id(2);
+    c2.set_taskid(10);
+    c2.set_content("Fix compilation errors!");
+    c2.set_type(CommentType::COMMENT_REVISION_REASON);
+
+    state.activeComments = {c1, c2};
+
+    std::string sentComment;
+    Components::RemarksCallbacks callbacks{
+        .onAddComment =
+            [&](std::int64_t id, const std::string& content) {
+                EXPECT_EQ(id, 10);
+                sentComment = content;
+            },
+    };
+
+    auto comp = Components::CreateRemarksPane(state, callbacks);
+    auto elem = comp->Render();
+    auto screen = Screen::Create(Dimension::Fixed(80), Dimension::Fixed(20));
+    Render(screen, elem);
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("REMARKS & HISTORY"), std::string::npos);
+    EXPECT_NE(rendered.find("[GENERAL]"), std::string::npos);
+    EXPECT_NE(rendered.find("General comment text"), std::string::npos);
+    EXPECT_NE(rendered.find("[REVISION REASON]"), std::string::npos);
+    EXPECT_NE(rendered.find("Fix compilation errors!"), std::string::npos);
+    EXPECT_NE(rendered.find("Send"), std::string::npos);
+}
+
+TEST(UiComponentsTest, TaskBoardViewRendersThreeColumns) {
+    AppState state;
+    Task t1;
+    t1.set_id(1);
+    t1.set_title("First task");
+    t1.set_status(TaskStatus::ACTIVE);
+
+    Task t2;
+    t2.set_id(2);
+    t2.set_title("Second task");
+    t2.set_status(TaskStatus::IN_REVIEW);
+
+    state.tasks = {t1, t2};
+    state.selectedTaskId = 1;
+
+    bool filterDispatched = false;
+    auto dispatch = [&](const State::Action& a) {
+        if (std::holds_alternative<State::SetStatusFilterAction>(a)) {
+            filterDispatched = true;
+        }
+    };
+
+    auto comp = Views::CreateTaskBoardView(state, dispatch, nullptr);
+    auto elem = comp->Render();
+    auto screen = Screen::Create(Dimension::Fixed(160), Dimension::Fixed(25));
+    Render(screen, elem);
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("FILTERS:"), std::string::npos);
+    EXPECT_NE(rendered.find("ALL"), std::string::npos);
+    EXPECT_NE(rendered.find("ACTIVE"), std::string::npos);
+    EXPECT_NE(rendered.find("#1"), std::string::npos);
+    EXPECT_NE(rendered.find("First task"), std::string::npos);
+    EXPECT_NE(rendered.find("REMARKS & HISTORY"), std::string::npos);
+
+    // Test 'f' hotkey cycles filter
+    EXPECT_TRUE(comp->OnEvent(Event::Character('f')));
+    EXPECT_TRUE(filterDispatched);
 }
 
 } // namespace Aquarium::UI::Tests

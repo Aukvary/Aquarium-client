@@ -3,12 +3,15 @@
 #include "Components/StatusBar.hpp"
 #include "NavigationSidebar.hpp"
 #include "State/Reducer.hpp"
+#include "Views/TaskBoardView.hpp"
 
 #include <chrono>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace Aquarium::UI {
 
@@ -100,13 +103,7 @@ Element MainScreen::RenderHeader() const {
 Element MainScreen::RenderWorkspace() const {
     switch (_state.currentView) {
     case ViewType::Tasks:
-        return vbox({
-                   text("Tasks Workspace") | bold | center,
-                   separator(),
-                   text("Phase 6 will provide the 3-column task board.") | dim |
-                       center,
-               }) |
-               border | flex;
+        return text("");
 
     case ViewType::Review:
         return vbox({
@@ -130,6 +127,39 @@ Element MainScreen::RenderWorkspace() const {
     return text("Unknown view") | border | flex;
 }
 
+void MainScreen::FetchInitialData() {
+    if (!_backendClient) {
+        return;
+    }
+    std::thread([this] {
+        auto usersRes = _backendClient->GetAllUsers();
+        if (usersRes.HasValue()) {
+            Dispatch(State::UsersLoadedAction{usersRes.Value()});
+        }
+
+        auto tasksRes = _backendClient->GetTasks();
+        if (tasksRes.HasValue()) {
+            std::vector<aquarium::api::Task> tasksList;
+            tasksList.reserve(tasksRes.Value().tasks_size());
+            for (int i = 0; i < tasksRes.Value().tasks_size(); ++i) {
+                tasksList.push_back(tasksRes.Value().tasks(i));
+            }
+            Dispatch(State::TasksLoadedAction{tasksList});
+
+            if (!tasksList.empty()) {
+                auto firstId = tasksList.front().id();
+                auto commentsRes = _backendClient->GetComments(firstId);
+                if (commentsRes.HasValue()) {
+                    Dispatch(State::CommentsLoadedAction{
+                        .taskId = firstId,
+                        .comments = commentsRes.Value(),
+                    });
+                }
+            }
+        }
+    }).detach();
+}
+
 Component MainScreen::BuildLayout() {
     auto sidebar = CreateNavigationSidebar(_state, [this](ViewType view) {
         Dispatch(State::NavigateToViewAction{view});
@@ -137,11 +167,24 @@ Component MainScreen::BuildLayout() {
 
     auto statusBar = Components::CreateStatusBar(_state);
 
-    auto workspaceRenderer = Renderer([this] { return RenderWorkspace(); });
+    auto taskBoard = Views::CreateTaskBoardView(
+        _state, [this](const State::Action& a) { Dispatch(a); },
+        _backendClient);
+
+    auto workspaceRenderer = Renderer([this, taskBoard] {
+        switch (_state.currentView) {
+        case ViewType::Tasks:
+            return taskBoard->Render();
+        case ViewType::Review:
+        case ViewType::CreateTask:
+            return RenderWorkspace();
+        }
+        return text("Unknown view") | border | flex;
+    });
 
     auto middleContainer = Container::Horizontal({
         sidebar,
-        workspaceRenderer,
+        taskBoard,
     });
 
     auto rootContainer = Container::Vertical({
@@ -155,7 +198,7 @@ Component MainScreen::BuildLayout() {
                 RenderHeader(),
                 hbox({
                     sidebar->Render(),
-                    workspaceRenderer->Render(),
+                    workspaceRenderer->Render() | flex,
                 }) | flex,
                 separator(),
                 statusBar->Render(),
@@ -191,6 +234,7 @@ Component MainScreen::BuildLayout() {
 
 void MainScreen::Run() {
     StartHealthMonitoring();
+    FetchInitialData();
     auto rootComponent = BuildLayout();
     _screen.Loop(rootComponent);
 }

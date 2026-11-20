@@ -31,6 +31,7 @@ public:
 private:
     void InitState();
     void StartHealthMonitoring();
+    void FetchInitialData();
 
     [[nodiscard]] ftxui::Component BuildLayout();
     [[nodiscard]] ftxui::Element RenderHeader() const;
