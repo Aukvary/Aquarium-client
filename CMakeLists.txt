@@ -1,0 +1,143 @@
+cmake_minimum_required(VERSION 3.20)
+project(aquarium-client CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(MSVC)
+  add_compile_options(/W4 /permissive-)
+else()
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# Dependencies
+include(FetchContent)
+
+# FTXUI (TUI Framework)
+FetchContent_Declare(
+  ftxui
+  GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+  GIT_TAG v7.0.3)
+FetchContent_MakeAvailable(ftxui)
+
+# nlohmann_json
+find_package(nlohmann_json CONFIG QUIET)
+if(NOT nlohmann_json_FOUND)
+  FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3)
+  FetchContent_MakeAvailable(nlohmann_json)
+endif()
+
+# GoogleTest
+find_package(GTest QUIET)
+if(NOT GTest_FOUND)
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG v1.14.0)
+  FetchContent_MakeAvailable(googletest)
+endif()
+
+# Protobuf & gRPC
+find_package(Protobuf REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
+
+# Proto Generation from Aquarium-server/proto
+set(PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Aquarium-server/proto")
+set(PROTO_FILES
+    "${PROTO_DIR}/TaskStoreService.proto" "${PROTO_DIR}/UserStoreService.proto"
+    "${PROTO_DIR}/UtilsService.proto")
+
+set(PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${PROTO_GEN_DIR}")
+
+if(TARGET protobuf::protoc)
+  set(PROTOC_BIN protobuf::protoc)
+else()
+  set(PROTOC_BIN ${Protobuf_PROTOC_EXECUTABLE})
+endif()
+
+if(TARGET gRPC::grpc_cpp_plugin)
+  set(GRPC_CPP_PLUGIN $<TARGET_FILE:gRPC::grpc_cpp_plugin>)
+else()
+  find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
+endif()
+
+set(PROTO_SRCS)
+set(PROTO_HDRS)
+
+foreach(PROTO_FILE ${PROTO_FILES})
+  get_filename_component(PROTO_NAME ${PROTO_FILE} NAME_WE)
+  set(PB_CC "${PROTO_GEN_DIR}/${PROTO_NAME}.pb.cc")
+  set(PB_H "${PROTO_GEN_DIR}/${PROTO_NAME}.pb.h")
+  set(GRPC_PB_CC "${PROTO_GEN_DIR}/${PROTO_NAME}.grpc.pb.cc")
+  set(GRPC_PB_H "${PROTO_GEN_DIR}/${PROTO_NAME}.grpc.pb.h")
+
+  list(APPEND PROTO_SRCS "${PB_CC}" "${GRPC_PB_CC}")
+  list(APPEND PROTO_HDRS "${PB_H}" "${GRPC_PB_H}")
+
+  add_custom_command(
+    OUTPUT "${PB_CC}" "${PB_H}" "${GRPC_PB_CC}" "${GRPC_PB_H}"
+    COMMAND
+      ${PROTOC_BIN} ARGS --proto_path "${PROTO_DIR}" --cpp_out
+      "${PROTO_GEN_DIR}" --grpc_out "${PROTO_GEN_DIR}"
+      --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN} "${PROTO_FILE}"
+    DEPENDS "${PROTO_FILE}"
+    COMMENT "Generating C++ and gRPC sources for ${PROTO_NAME}.proto"
+    VERBATIM)
+endforeach()
+
+add_library(aquarium-client-proto STATIC ${PROTO_SRCS} ${PROTO_HDRS})
+target_include_directories(aquarium-client-proto SYSTEM
+                           PUBLIC "${PROTO_GEN_DIR}")
+if(NOT MSVC)
+  target_compile_options(aquarium-client-proto PRIVATE -Wno-pedantic
+                                                       -Wno-unused-parameter)
+endif()
+target_link_libraries(aquarium-client-proto PUBLIC protobuf::libprotobuf
+                                                   gRPC::grpc++)
+
+# Main Client Executable
+add_executable(aquarium-client src/main.cpp)
+
+target_include_directories(aquarium-client
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+target_link_libraries(
+  aquarium-client
+  PRIVATE aquarium-client-proto
+          ftxui::screen
+          ftxui::dom
+          ftxui::component
+          nlohmann_json::nlohmann_json
+          gRPC::grpc++
+          protobuf::libprotobuf)
+
+# Testing Targets
+enable_testing()
+
+add_executable(
+  aquarium-client-unittest tests/AppStateTest.cpp tests/ConfigTest.cpp
+                           tests/GrpcMockTest.cpp)
+
+target_include_directories(aquarium-client-unittest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+target_link_libraries(
+  aquarium-client-unittest
+  PRIVATE aquarium-client-proto
+          ftxui::screen
+          ftxui::dom
+          ftxui::component
+          nlohmann_json::nlohmann_json
+          gRPC::grpc++
+          protobuf::libprotobuf
+          GTest::gtest
+          GTest::gtest_main)
+
+include(GoogleTest)
+gtest_discover_tests(aquarium-client-unittest)
