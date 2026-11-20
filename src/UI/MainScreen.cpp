@@ -12,6 +12,7 @@
 #include <chrono>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/terminal.hpp>
 #include <string>
 #include <thread>
 #include <utility>
@@ -368,6 +369,12 @@ Component MainScreen::BuildLayout() {
 
     auto layoutRenderer =
         Renderer(rootContainer, [this, sidebar, tabWorkspace, statusBar] {
+            auto termSize = Terminal::Size();
+            if (termSize.dimx > 0 && termSize.dimy > 0 &&
+                (termSize.dimx < 80 || termSize.dimy < 24)) {
+                return RenderTerminalTooSmallWarning(termSize.dimx,
+                                                    termSize.dimy, 80, 24);
+            }
             return vbox({
                 RenderHeader(),
                 hbox({

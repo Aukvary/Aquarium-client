@@ -4,6 +4,7 @@
 #include "UI/Components/StatusBar.hpp"
 #include "UI/Components/TaskDetailsPane.hpp"
 #include "UI/NavigationSidebar.hpp"
+#include "UI/UIHelpers.hpp"
 #include "UI/Views/AuthModal.hpp"
 #include "UI/Views/CreateTaskView.hpp"
 #include "UI/Views/ReviewView.hpp"
@@ -368,6 +369,18 @@ TEST(UiComponentsTest, TimeUtilsParseDate) {
 
     auto empty = Common::ParseDate("");
     EXPECT_FALSE(empty.has_value());
+}
+
+TEST(UiComponentsTest, TerminalTooSmallWarningRendersProperly) {
+    auto elem = RenderTerminalTooSmallWarning(60, 15, 80, 24);
+    auto screen = Screen::Create(Dimension::Fixed(60), Dimension::Fixed(15));
+    Render(screen, elem);
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("WARNING: TERMINAL WINDOW TOO SMALL"),
+              std::string::npos);
+    EXPECT_NE(rendered.find("Current size: 60x15"), std::string::npos);
+    EXPECT_NE(rendered.find("Minimum required size: 80x24"), std::string::npos);
 }
 
 } // namespace Aquarium::UI::Tests

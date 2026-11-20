@@ -37,4 +37,29 @@ inline ftxui::Element RenderStatusBadge(aquarium::api::TaskStatus status) {
            ftxui::bold;
 }
 
+inline ftxui::Element RenderTerminalTooSmallWarning(int currentWidth,
+                                                   int currentHeight,
+                                                   int minWidth = 80,
+                                                   int minHeight = 24) {
+    return ftxui::vbox({
+               ftxui::filler(),
+               ftxui::text("WARNING: TERMINAL WINDOW TOO SMALL") |
+                   ftxui::bold | ftxui::color(ftxui::Color::RedLight) |
+                   ftxui::center,
+               ftxui::separator(),
+               ftxui::text("Current size: " + std::to_string(currentWidth) +
+                           "x" + std::to_string(currentHeight)) |
+                   ftxui::center,
+               ftxui::text("Minimum required size: " +
+                           std::to_string(minWidth) + "x" +
+                           std::to_string(minHeight)) |
+                   ftxui::bold | ftxui::color(ftxui::Color::YellowLight) |
+                   ftxui::center,
+               ftxui::text("Please enlarge or maximize your terminal window.") |
+                   ftxui::dim | ftxui::center,
+               ftxui::filler(),
+           }) |
+           ftxui::border | ftxui::center;
+}
+
 } // namespace Aquarium::UI
