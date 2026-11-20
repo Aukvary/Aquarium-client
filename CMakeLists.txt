@@ -113,7 +113,10 @@ add_library(
   src/Config/ConfigManager.cpp
   src/Grpc/BackendClient.cpp
   src/Grpc/HealthChecker.cpp
-  src/State/Reducer.cpp)
+  src/State/Reducer.cpp
+  src/UI/Components/StatusBar.cpp
+  src/UI/NavigationSidebar.cpp
+  src/UI/MainScreen.cpp)
 
 target_include_directories(aquarium-client-core
                            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -143,7 +146,7 @@ enable_testing()
 
 add_executable(
   aquarium-client-unittest tests/AppStateTest.cpp tests/ConfigTest.cpp
-                           tests/GrpcMockTest.cpp)
+                           tests/GrpcMockTest.cpp tests/UiComponentsTest.cpp)
 
 target_include_directories(aquarium-client-unittest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

@@ -1,17 +1,15 @@
 #include "Config/ConfigManager.hpp"
+#include "Grpc/BackendClient.hpp"
+#include "UI/MainScreen.hpp"
 
-#include <ftxui/component/captured_mouse.hpp>
-#include <ftxui/component/component.hpp>
-#include <ftxui/component/screen_interactive.hpp>
-#include <ftxui/dom/elements.hpp>
 #include <iostream>
+#include <memory>
 #include <string>
-#include <TaskStoreService.grpc.pb.h>
-#include <UserStoreService.grpc.pb.h>
-#include <UtilsService.grpc.pb.h>
 
 int main(int argc, char* argv[]) {
     using Aquarium::Config::ConfigManager;
+    using Aquarium::Grpc::BackendClient;
+    using Aquarium::UI::MainScreen;
 
     auto overrides = ConfigManager::ParseCommandLine(argc, argv);
     if (overrides.showHelp) {
@@ -29,54 +27,15 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    ConfigManager configManager;
-    configManager.Load();
-    configManager.ApplyOverrides(overrides);
+    auto configManager = std::make_shared<ConfigManager>();
+    configManager->Load();
+    configManager->ApplyOverrides(overrides);
 
-    std::string activeServer = configManager.GetActiveServer();
-    auto session = configManager.GetActiveSession();
-    std::string userDisplay =
-        session.has_value() && !session->userName.empty()
-            ? session->userName + " (ID: " + std::to_string(session->userId) +
-                  ")"
-            : "Unauthenticated";
+    auto backendClient = std::make_shared<BackendClient>(
+        configManager->GetActiveServer(), configManager->GetActiveToken());
 
-    auto screen = ftxui::ScreenInteractive::Fullscreen();
+    MainScreen mainScreen(configManager, backendClient);
+    mainScreen.Run();
 
-    auto renderer = ftxui::Renderer([&] {
-        return ftxui::vbox({
-                   ftxui::text("Aquarium TUI Client") | ftxui::bold |
-                       ftxui::center,
-                   ftxui::separator(),
-                   ftxui::hbox({
-                       ftxui::text(" Active Server: ") | ftxui::bold,
-                       ftxui::text(activeServer) |
-                           ftxui::color(ftxui::Color::Cyan),
-                       ftxui::filler(),
-                       ftxui::text(" User: ") | ftxui::bold,
-                       ftxui::text(userDisplay) |
-                           ftxui::color(ftxui::Color::Yellow),
-                       ftxui::text(" "),
-                   }),
-                   ftxui::separator(),
-                   ftxui::text("Phase 2: Configuration & Session Storage") |
-                       ftxui::center,
-                   ftxui::separator(),
-                   ftxui::text("Press 'q' or Esc to exit.") | ftxui::dim |
-                       ftxui::center,
-               }) |
-               ftxui::border;
-    });
-
-    auto catch_event = ftxui::CatchEvent(renderer, [&](ftxui::Event event) {
-        if (event == ftxui::Event::Character('q') ||
-            event == ftxui::Event::Escape) {
-            screen.ExitLoopClosure()();
-            return true;
-        }
-        return false;
-    });
-
-    screen.Loop(catch_event);
     return 0;
 }
