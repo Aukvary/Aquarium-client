@@ -32,6 +32,9 @@ private:
     void InitState();
     void StartHealthMonitoring();
     void FetchInitialData();
+    void HandleAuthSubmit(const std::string& server,
+                          const std::string& name,
+                          const std::string& inviteKey);
 
     [[nodiscard]] ftxui::Component BuildLayout();
     [[nodiscard]] ftxui::Element RenderHeader() const;
@@ -43,6 +46,7 @@ private:
 
     State::AppState _state;
     ftxui::ScreenInteractive _screen;
+    bool _showAuthModal{false};
 };
 
 } // namespace Aquarium::UI

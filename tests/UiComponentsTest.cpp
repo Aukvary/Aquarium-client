@@ -3,6 +3,7 @@
 #include "UI/Components/StatusBar.hpp"
 #include "UI/Components/TaskDetailsPane.hpp"
 #include "UI/NavigationSidebar.hpp"
+#include "UI/Views/AuthModal.hpp"
 #include "UI/Views/TaskBoardView.hpp"
 
 #include <chrono>
@@ -245,6 +246,44 @@ TEST(UiComponentsTest, TaskBoardViewRendersThreeColumns) {
     // Test 'f' hotkey cycles filter
     EXPECT_TRUE(comp->OnEvent(Event::Character('f')));
     EXPECT_TRUE(filterDispatched);
+}
+
+TEST(UiComponentsTest, AuthModalRendersAndValidates) {
+    AppState state;
+    state.session.serverHost = "127.0.0.1:50051";
+
+    bool submitted = false;
+    bool cancelled = false;
+
+    Views::AuthModalCallbacks callbacks{
+        .onSubmit = [&](const std::string&, const std::string&,
+                        const std::string&) { submitted = true; },
+        .onCancel = [&]() { cancelled = true; },
+    };
+
+    auto comp = Views::CreateAuthModal(state, callbacks);
+    auto elem = comp->Render();
+    auto screen = Screen::Create(Dimension::Fixed(80), Dimension::Fixed(20));
+    Render(screen, elem);
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("REGISTRATION / LOGIN"), std::string::npos);
+    EXPECT_NE(rendered.find("127.0.0.1:50051"), std::string::npos);
+    EXPECT_NE(rendered.find("Register & Connect"), std::string::npos);
+    EXPECT_NE(rendered.find("Cancel"), std::string::npos);
+
+    // Pressing Return with empty username should trigger validation error
+    EXPECT_TRUE(comp->OnEvent(Event::Return));
+    EXPECT_FALSE(submitted);
+
+    elem = comp->Render();
+    Render(screen, elem);
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("Username cannot be empty"), std::string::npos);
+
+    // Pressing Escape triggers cancel
+    EXPECT_TRUE(comp->OnEvent(Event::Escape));
+    EXPECT_TRUE(cancelled);
 }
 
 } // namespace Aquarium::UI::Tests

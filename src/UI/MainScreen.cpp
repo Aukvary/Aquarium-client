@@ -3,6 +3,7 @@
 #include "Components/StatusBar.hpp"
 #include "NavigationSidebar.hpp"
 #include "State/Reducer.hpp"
+#include "Views/AuthModal.hpp"
 #include "Views/TaskBoardView.hpp"
 
 #include <chrono>
@@ -45,6 +46,10 @@ void MainScreen::InitState() {
         }
     }
     _state.connectionStatus = State::ConnectionStatus::Connecting;
+    if (!_state.session.IsAuthenticated()) {
+        _state.activeModal = State::ModalType::AuthModal;
+        _showAuthModal = true;
+    }
 }
 
 void MainScreen::StartHealthMonitoring() {
@@ -69,7 +74,10 @@ void MainScreen::StartHealthMonitoring() {
 }
 
 void MainScreen::Dispatch(const Action& action) {
-    _screen.Post([this, action] { _state = Reducer::Reduce(_state, action); });
+    _screen.Post([this, action] {
+        _state = Reducer::Reduce(_state, action);
+        _showAuthModal = (_state.activeModal == State::ModalType::AuthModal);
+    });
     _screen.PostEvent(Event::Custom);
 }
 
@@ -160,6 +168,42 @@ void MainScreen::FetchInitialData() {
     }).detach();
 }
 
+void MainScreen::HandleAuthSubmit(const std::string& server,
+                                  const std::string& name,
+                                  const std::string& inviteKey) {
+    if (!_backendClient) {
+        return;
+    }
+    _backendClient->SetTargetServer(server);
+    auto res = _backendClient->AddUser(name, inviteKey);
+    if (res.HasValue()) {
+        auto user = res.Value();
+        if (_configManager) {
+            _configManager->UpdateActiveSession(user.id(), user.name(),
+                                                user.key());
+        }
+        _backendClient->SetAuthToken(user.key());
+
+        Dispatch(State::SetSessionAction{
+            .server = server,
+            .userId = user.id(),
+            .userName = user.name(),
+            .token = user.key(),
+        });
+        Dispatch(State::CloseModalAction{});
+        Dispatch(State::ShowToastAction{
+            .message = "Successfully registered as " + user.name() + "!",
+            .severity = State::ToastSeverity::Success,
+        });
+        FetchInitialData();
+    } else {
+        Dispatch(State::ShowToastAction{
+            .message = "Registration failed: " + res.Error().message,
+            .severity = State::ToastSeverity::Error,
+        });
+    }
+}
+
 Component MainScreen::BuildLayout() {
     auto sidebar = CreateNavigationSidebar(_state, [this](ViewType view) {
         Dispatch(State::NavigateToViewAction{view});
@@ -205,7 +249,18 @@ Component MainScreen::BuildLayout() {
             });
         });
 
-    return CatchEvent(layoutRenderer, [this](Event event) {
+    auto authModal = Views::CreateAuthModal(
+        _state,
+        Views::AuthModalCallbacks{
+            .onSubmit =
+                [this](const std::string& s, const std::string& n,
+                       const std::string& k) { HandleAuthSubmit(s, n, k); },
+            .onCancel = [this] { Dispatch(State::CloseModalAction{}); },
+        });
+
+    auto modalContainer = Modal(layoutRenderer, authModal, &_showAuthModal);
+
+    return CatchEvent(modalContainer, [this](Event event) {
         if (event == Event::Character('q') ||
             event == Event::Character('\x03')) {
             _screen.ExitLoopClosure()();

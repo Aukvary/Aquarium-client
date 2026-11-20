@@ -119,6 +119,7 @@ add_library(
   src/UI/Components/RemarksPane.cpp
   src/UI/NavigationSidebar.cpp
   src/UI/Views/TaskBoardView.cpp
+  src/UI/Views/AuthModal.cpp
   src/UI/MainScreen.cpp)
 
 target_include_directories(aquarium-client-core
