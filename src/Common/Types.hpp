@@ -84,6 +84,9 @@ struct AppError {
 
 template <typename T>
 class Result {
+private:
+    std::variant<T, AppError> _data;
+
 public:
     Result(T value) : _data(std::move(value)) {}
     Result(AppError error) : _data(std::move(error)) {}
@@ -114,13 +117,13 @@ public:
         }
         return fallback;
     }
-
-private:
-    std::variant<T, AppError> _data;
 };
 
 template <>
 class Result<void> {
+private:
+    AppError _error;
+
 public:
     Result() : _error(AppError{}) {}
     Result(AppError error) : _error(std::move(error)) {}
@@ -136,9 +139,6 @@ public:
     [[nodiscard]] const AppError& Error() const noexcept {
         return _error;
     }
-
-private:
-    AppError _error;
 };
 
 } // namespace Aquarium::Common

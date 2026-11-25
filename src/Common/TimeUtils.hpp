@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <ctime>
 #include <google/protobuf/timestamp.pb.h>
 #include <iomanip>
@@ -16,7 +15,7 @@ FormatTimestamp(const google::protobuf::Timestamp& ts,
     if (ts.seconds() == 0 && ts.nanos() == 0) {
         return "-";
     }
-    std::time_t rawTime = static_cast<std::time_t>(ts.seconds());
+    auto rawTime = static_cast<std::time_t>(ts.seconds());
     std::tm timeInfo{};
 #if defined(_WIN32)
     localtime_s(&timeInfo, &rawTime);

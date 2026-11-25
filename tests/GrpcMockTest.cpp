@@ -19,8 +19,6 @@ namespace Aquarium::Grpc::Tests {
 using namespace aquarium::api;
 using Common::AppErrorCode;
 
-// --- Mock Services for In-Process Server Testing ---
-
 class MockUtilsServiceImpl final : public UtilsService::Service {
 public:
     grpc::Status Health(grpc::ServerContext* /*context*/,
@@ -42,8 +40,8 @@ public:
         auto authIt = clientMetadata.find("authorization");
         if (authIt == clientMetadata.end() ||
             authIt->second != "Bearer valid_token") {
-            return grpc::Status(grpc::StatusCode::UNAUTHENTICATED,
-                                "Missing or invalid Bearer token");
+            return {grpc::StatusCode::UNAUTHENTICATED,
+                    "Missing or invalid Bearer token"};
         }
 
         auto* u1 = response->add_users();
@@ -61,7 +59,7 @@ public:
                          const GetUserRequest* request,
                          GetUserResponse* response) override {
         if (request->id() == 999) {
-            return grpc::Status(grpc::StatusCode::NOT_FOUND, "User not found");
+            return {grpc::StatusCode::NOT_FOUND, "User not found"};
         }
         auto* user = response->mutable_user();
         user->set_id(request->id());
@@ -76,8 +74,8 @@ public:
         auto inviteIt = clientMetadata.find("invite-key");
         if (inviteIt == clientMetadata.end() ||
             inviteIt->second != "Invite secret_invite_code") {
-            return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
-                                "Invalid invite key");
+            return grpc::Status{grpc::StatusCode::PERMISSION_DENIED,
+                                "Invalid invite key"};
         }
 
         auto* user = response->mutable_user();
@@ -100,8 +98,7 @@ public:
                             const DeleteUserRequest* request,
                             DeleteUserResponse* response) override {
         if (request->id() == 1) {
-            return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
-                                "Cannot delete admin");
+            return {grpc::StatusCode::PERMISSION_DENIED, "Cannot delete admin"};
         }
         response->set_success(true);
         return grpc::Status::OK;
@@ -129,7 +126,7 @@ public:
                          const GetTaskRequest* request,
                          GetTaskResponse* response) override {
         if (request->id() == 404) {
-            return grpc::Status(grpc::StatusCode::NOT_FOUND, "Task not found");
+            return {grpc::StatusCode::NOT_FOUND, "Task not found"};
         }
         auto* task = response->mutable_task();
         task->set_id(request->id());
@@ -215,8 +212,8 @@ public:
                             const RejectTaskRequest* request,
                             RejectTaskResponse* response) override {
         if (request->reason().empty()) {
-            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-                                "Reason cannot be empty");
+            return {grpc::StatusCode::INVALID_ARGUMENT,
+                    "Reason cannot be empty"};
         }
         auto* task = response->mutable_task();
         task->set_id(request->taskid());

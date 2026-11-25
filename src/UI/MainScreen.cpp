@@ -294,6 +294,11 @@ void MainScreen::FetchInitialData() {
                     });
                 }
             }
+        } else {
+            Dispatch(State::ShowToastAction{
+                .message = "Failed to load tasks: " + tasksRes.Error().message,
+                .severity = State::ToastSeverity::Error,
+            });
         }
     }).detach();
 }
@@ -373,7 +378,7 @@ Component MainScreen::BuildLayout() {
             if (termSize.dimx > 0 && termSize.dimy > 0 &&
                 (termSize.dimx < 80 || termSize.dimy < 24)) {
                 return RenderTerminalTooSmallWarning(termSize.dimx,
-                                                    termSize.dimy, 80, 24);
+                                                     termSize.dimy, 80, 24);
             }
             return vbox({
                 RenderHeader(),

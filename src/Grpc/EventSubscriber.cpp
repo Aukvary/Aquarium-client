@@ -1,7 +1,9 @@
-#include "EventSubscriber.hpp"
+#include "./EventSubscriber.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
+#include <mutex>
 #include <utility>
 
 namespace Aquarium::Grpc {
@@ -17,7 +19,7 @@ EventSubscriber::~EventSubscriber() {
 }
 
 void EventSubscriber::Start() {
-    std::lock_guard lock(_mutex);
+    std::scoped_lock lock(_mutex);
     if (_running) {
         return;
     }
@@ -27,7 +29,7 @@ void EventSubscriber::Start() {
 
 void EventSubscriber::Stop() {
     {
-        std::lock_guard lock(_mutex);
+        std::scoped_lock lock(_mutex);
         if (!_running) {
             return;
         }
@@ -60,7 +62,7 @@ void EventSubscriber::RunLoop(std::stop_token stopToken) {
 
         if (context) {
             {
-                std::lock_guard lock(_mutex);
+                std::scoped_lock lock(_mutex);
                 _activeContext = context.get();
             }
 
@@ -82,7 +84,7 @@ void EventSubscriber::RunLoop(std::stop_token stopToken) {
             }
 
             {
-                std::lock_guard lock(_mutex);
+                std::scoped_lock lock(_mutex);
                 _activeContext = nullptr;
             }
         }
@@ -91,7 +93,6 @@ void EventSubscriber::RunLoop(std::stop_token stopToken) {
             break;
         }
 
-        // Wait with backoff before reconnecting
         std::unique_lock lock(_mutex);
         _cv.wait_for(lock, stopToken, backoff,
                      [&stopToken] { return stopToken.stop_requested(); });

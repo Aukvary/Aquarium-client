@@ -10,27 +10,27 @@
 
 namespace Aquarium::State {
 
-enum class ViewType {
+enum class ViewType : std::uint8_t {
     Tasks = 0,
     Review,
     CreateTask,
 };
 
-enum class ModalType {
+enum class ModalType : std::uint8_t {
     None = 0,
     AuthModal,
     RejectTaskModal,
     ConfirmDialog,
 };
 
-enum class ConnectionStatus {
+enum class ConnectionStatus : std::uint8_t {
     Connecting = 0,
     Connected,
     Reconnecting,
     Offline,
 };
 
-enum class ToastSeverity {
+enum class ToastSeverity : std::uint8_t {
     Info = 0,
     Success,
     Warning,

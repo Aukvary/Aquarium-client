@@ -15,7 +15,7 @@ HealthChecker::~HealthChecker() {
 }
 
 void HealthChecker::Start() {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::scoped_lock lock(_mutex);
     if (_running) {
         return;
     }
@@ -25,7 +25,7 @@ void HealthChecker::Start() {
 
 void HealthChecker::Stop() {
     {
-        std::lock_guard<std::mutex> lock(_mutex);
+        std::scoped_lock lock(_mutex);
         if (!_running) {
             return;
         }
@@ -40,7 +40,7 @@ void HealthChecker::Stop() {
 
 void HealthChecker::TriggerCheck() {
     {
-        std::lock_guard<std::mutex> lock(_mutex);
+        std::scoped_lock lock(_mutex);
         _triggerNow = true;
     }
     _cv.notify_one();

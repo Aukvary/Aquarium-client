@@ -1,9 +1,11 @@
-#include "Reducer.hpp"
+#include "./Reducer.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -11,18 +13,54 @@ namespace Aquarium::State {
 
 namespace {
 
-bool ContainsCaseInsensitive(const std::string& haystack,
-                             const std::string& needle) {
+std::string Trim(std::string_view str) {
+    size_t first = str.find_first_not_of(" \t\n\r");
+    if (first == std::string_view::npos) {
+        return "";
+    }
+    size_t last = str.find_last_not_of(" \t\n\r");
+    return std::string(str.substr(first, (last - first + 1)));
+}
+
+std::string ToLowerUtf8(std::string_view str) {
+    std::string result;
+    result.reserve(str.size());
+    for (size_t i = 0; i < str.size(); ++i) {
+        auto c = static_cast<unsigned char>(str[i]);
+        if (c == 0xD0 && i + 1 < str.size()) {
+            auto next = static_cast<unsigned char>(str[i + 1]);
+            if (next >= 0x90 && next <= 0x9F) {
+                result.push_back(static_cast<char>(0xD0));
+                result.push_back(static_cast<char>(next + 0x20));
+                ++i;
+                continue;
+            }
+            if (next >= 0xA0 && next <= 0xAF) {
+                result.push_back(static_cast<char>(0xD1));
+                result.push_back(static_cast<char>(next - 0x20));
+                ++i;
+                continue;
+            }
+            if (next == 0x81) {
+                result.push_back(static_cast<char>(0xD1));
+                result.push_back(static_cast<char>(0x91));
+                ++i;
+                continue;
+            }
+        }
+        result.push_back(static_cast<char>(std::tolower(c)));
+    }
+    return result;
+}
+
+bool ContainsCaseInsensitive(std::string_view haystack,
+                             std::string_view needle) {
     if (needle.empty()) {
         return true;
     }
-    auto it =
-        std::search(haystack.begin(), haystack.end(), needle.begin(),
-                    needle.end(), [](char ch1, char ch2) {
-                        return std::tolower(static_cast<unsigned char>(ch1)) ==
-                               std::tolower(static_cast<unsigned char>(ch2));
-                    });
-    return it != haystack.end();
+    std::string lowerHaystack = ToLowerUtf8(haystack);
+    std::string lowerNeedle = ToLowerUtf8(needle);
+    return lowerHaystack.find(lowerNeedle) != std::string::npos;
 }
 
 } // namespace
@@ -51,8 +89,15 @@ const aquarium::api::User* AppState::FindUser(std::int64_t id) const {
 std::vector<const aquarium::api::Task*> AppState::GetFilteredTasks() const {
     std::vector<const aquarium::api::Task*> result;
     result.reserve(tasks.size());
+    std::unordered_set<std::int64_t> seenIds;
+
+    std::string trimmedQuery = Trim(filter.searchQuery);
 
     for (const auto& task : tasks) {
+        if (!seenIds.insert(task.id()).second) {
+            continue;
+        }
+
         if (currentView == ViewType::Review) {
             if (task.status() != aquarium::api::TaskStatus::IN_REVIEW) {
                 continue;
@@ -63,12 +108,14 @@ std::vector<const aquarium::api::Task*> AppState::GetFilteredTasks() const {
             }
         }
 
-        if (!filter.searchQuery.empty()) {
+        if (!trimmedQuery.empty()) {
             std::string idStr = std::to_string(task.id());
             bool matchTitle =
-                ContainsCaseInsensitive(task.title(), filter.searchQuery);
-            bool matchId = ContainsCaseInsensitive(idStr, filter.searchQuery);
-            if (!matchTitle && !matchId) {
+                ContainsCaseInsensitive(task.title(), trimmedQuery);
+            bool matchId = ContainsCaseInsensitive(idStr, trimmedQuery);
+            bool matchDesc =
+                ContainsCaseInsensitive(task.description(), trimmedQuery);
+            if (!matchTitle && !matchId && !matchDesc) {
                 continue;
             }
         }
@@ -117,7 +164,13 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
             } else if constexpr (std::is_same_v<T, SetLoadingTasksAction>) {
                 state.isLoadingTasks = a.loading;
             } else if constexpr (std::is_same_v<T, TasksLoadedAction>) {
-                state.tasks = a.tasks;
+                state.tasks.clear();
+                std::unordered_set<std::int64_t> seenIds;
+                for (const auto& t : a.tasks) {
+                    if (seenIds.insert(t.id()).second) {
+                        state.tasks.push_back(t);
+                    }
+                }
                 state.isLoadingTasks = false;
                 if (state.selectedTaskId.has_value()) {
                     bool found = false;
@@ -143,7 +196,13 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
                 state.isLoadingComments = false;
                 if (state.selectedTaskId.has_value() &&
                     *state.selectedTaskId == a.taskId) {
-                    state.activeComments = a.comments;
+                    state.activeComments.clear();
+                    std::unordered_set<std::int64_t> seenIds;
+                    for (const auto& c : a.comments) {
+                        if (seenIds.insert(c.id()).second) {
+                            state.activeComments.push_back(c);
+                        }
+                    }
                 }
             } else if constexpr (std::is_same_v<T, SetLoadingUsersAction>) {
                 state.isLoadingUsers = a.loading;
@@ -151,7 +210,15 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
                 state.users = a.users;
                 state.isLoadingUsers = false;
             } else if constexpr (std::is_same_v<T, TaskCreatedAction>) {
-                state.tasks.insert(state.tasks.begin(), a.task);
+                auto it =
+                    std::ranges::find_if(state.tasks, [&a](const auto& t) {
+                        return t.id() == a.task.id();
+                    });
+                if (it != state.tasks.end()) {
+                    *it = a.task;
+                } else {
+                    state.tasks.insert(state.tasks.begin(), a.task);
+                }
                 if (!state.selectedTaskId.has_value()) {
                     state.selectedTaskId = a.task.id();
                 }
@@ -170,9 +237,9 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
                     }
                 }
             } else if constexpr (std::is_same_v<T, TaskDeletedAction>) {
-                auto it = std::remove_if(
-                    state.tasks.begin(), state.tasks.end(),
-                    [&a](const auto& t) { return t.id() == a.taskId; });
+                auto it = std::remove_if(state.tasks, [&a](const auto& t) {
+                    return t.id() == a.taskId;
+                });
                 state.tasks.erase(it, state.tasks.end());
 
                 if (state.selectedTaskId.has_value() &&
@@ -186,7 +253,15 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
             } else if constexpr (std::is_same_v<T, CommentAddedAction>) {
                 if (state.selectedTaskId.has_value() &&
                     *state.selectedTaskId == a.comment.taskid()) {
-                    state.activeComments.push_back(a.comment);
+                    auto it = std::ranges::find_if(
+                        state.activeComments, [&a](const auto& c) {
+                            return c.id() == a.comment.id();
+                        });
+                    if (it == state.activeComments.end()) {
+                        state.activeComments.push_back(a.comment);
+                    } else {
+                        *it = a.comment;
+                    }
                 }
             } else if constexpr (std::is_same_v<T, TaskRejectedAction>) {
                 for (auto& t : state.tasks) {
@@ -197,7 +272,15 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
                 }
                 if (state.selectedTaskId.has_value() &&
                     *state.selectedTaskId == a.task.id()) {
-                    state.activeComments.push_back(a.comment);
+                    auto it = std::ranges::find_if(
+                        state.activeComments, [&a](const auto& c) {
+                            return c.id() == a.comment.id();
+                        });
+                    if (it == state.activeComments.end()) {
+                        state.activeComments.push_back(a.comment);
+                    } else {
+                        *it = a.comment;
+                    }
                 }
             }
         },

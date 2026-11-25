@@ -50,6 +50,48 @@ TaskStatus GetNextStatus(TaskStatus current) {
     }
 }
 
+class SearchInputWrapper : public ComponentBase {
+public:
+    SearchInputWrapper(Component child,
+                       std::shared_ptr<std::string> query,
+                       const State::AppState& state,
+                       std::function<void(const State::Action&)> dispatch)
+        : _query(std::move(query)), _state(state),
+          _dispatch(std::move(dispatch)), _lastQuery(*_query) {
+        Add(std::move(child));
+    }
+
+    bool OnEvent(Event event) override {
+        bool handled = ComponentBase::OnEvent(event);
+        SyncQuery();
+        return handled;
+    }
+
+    Element Render() override {
+        // If state modified query externally, keep local query in sync
+        if (_lastQuery == *_query && *_query != _state.filter.searchQuery) {
+            *_query = _state.filter.searchQuery;
+            _lastQuery = *_query;
+        } else {
+            SyncQuery();
+        }
+        return ComponentBase::Render();
+    }
+
+private:
+    void SyncQuery() {
+        if (*_query != _lastQuery) {
+            _lastQuery = *_query;
+            _dispatch(State::SetSearchQueryAction{_lastQuery});
+        }
+    }
+
+    std::shared_ptr<std::string> _query;
+    const State::AppState& _state;
+    std::function<void(const State::Action&)> _dispatch;
+    std::string _lastQuery;
+};
+
 } // namespace
 
 Component
@@ -90,12 +132,19 @@ CreateTaskBoardView(const State::AppState& state,
     searchOpt.on_change = [dispatch, searchQuery] {
         dispatch(State::SetSearchQueryAction{*searchQuery});
     };
-    auto searchField = Input(searchQuery.get(), "Search (/)...", searchOpt);
+    searchOpt.on_enter = [filterBar] {
+        if (filterBar) {
+            filterBar->TakeFocus();
+        }
+    };
+    auto rawSearchField = Input(searchQuery.get(), "Search (/)...", searchOpt);
+    auto searchField =
+        Make<SearchInputWrapper>(rawSearchField, searchQuery, state, dispatch);
 
     // Center Details Pane Callbacks
     Components::TaskDetailsCallbacks detailsCallbacks{
         .onChangeStatus =
-            [state, dispatch, client](std::int64_t taskId) {
+            [&state, dispatch, client](std::int64_t taskId) {
                 auto task = state.GetSelectedTask();
                 if (task == nullptr || !client) {
                     return;
@@ -120,7 +169,7 @@ CreateTaskBoardView(const State::AppState& state,
                 }
             },
         .onAssignWorker =
-            [state, dispatch, client](std::int64_t taskId) {
+            [&state, dispatch, client](std::int64_t taskId) {
                 if (!client || state.session.userId == 0) {
                     dispatch(State::ShowToastAction{
                         .message = "Cannot assign: unauthenticated user.",
@@ -170,8 +219,8 @@ CreateTaskBoardView(const State::AppState& state,
     // Right Remarks Pane Callbacks
     Components::RemarksCallbacks remarksCallbacks{
         .onAddComment =
-            [state, dispatch, client](std::int64_t taskId,
-                                      const std::string& content) {
+            [&state, dispatch, client](std::int64_t taskId,
+                                       const std::string& content) {
                 if (!client) {
                     return;
                 }
@@ -245,8 +294,8 @@ CreateTaskBoardView(const State::AppState& state,
                 });
 
                 if (isSelected) {
-                    taskRows.push_back(row | color(Color::CyanLight) | bold |
-                                       inverted);
+                    taskRows.push_back(ftxui::select(
+                        row | color(Color::CyanLight) | bold | inverted));
                 } else {
                     taskRows.push_back(row);
                 }
@@ -282,8 +331,41 @@ CreateTaskBoardView(const State::AppState& state,
             });
         });
 
-    return CatchEvent(fullLayout, [state, dispatch,
+    return CatchEvent(fullLayout, [&state, dispatch, searchField, searchQuery,
+                                   filterBar, remarksPane,
                                    selectTaskAndFetchComments](Event event) {
+        // Hotkey '/' focuses search field if not currently typing in an input
+        if (event == Event::Character('/') && !searchField->Focused() &&
+            !remarksPane->Focused()) {
+            searchField->TakeFocus();
+            return true;
+        }
+
+        // When searchField is focused:
+        if (searchField->Focused()) {
+            if (event == Event::Escape) {
+                if (!searchQuery->empty()) {
+                    searchQuery->clear();
+                    dispatch(State::SetSearchQueryAction{""});
+                }
+                filterBar->TakeFocus();
+                return true;
+            }
+            if (event == Event::Return) {
+                filterBar->TakeFocus();
+                return true;
+            }
+            // Do not intercept characters (e.g. 'f', 'j', 'k') or backspace
+            // while in search
+            return false;
+        }
+
+        // When remarksPane is focused (typing a comment), do not intercept
+        // hotkeys
+        if (remarksPane->Focused()) {
+            return false;
+        }
+
         // Hotkey 'f': cycle filters
         if (event == Event::Character('f')) {
             size_t currentIndex = 0;

@@ -1,11 +1,12 @@
 #include "Config/ConfigManager.hpp"
 
+#include <array>
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <string_view>
 
 namespace Aquarium::Config::Tests {
 
@@ -96,7 +97,6 @@ TEST_F(ConfigTest, AtomicSaveAndReloadSession) {
     EXPECT_EQ(session1->userName, "bob");
     EXPECT_EQ(session1->authToken, "secret_token_12345");
 
-    // Load from disk using another ConfigManager instance
     ConfigManager manager2(_testConfigPath);
     ASSERT_TRUE(manager2.Load());
 
@@ -125,14 +125,14 @@ TEST_F(ConfigTest, CommandLineArgumentOverrides) {
     ASSERT_TRUE(manager.Load());
     manager.UpdateActiveSession(1, "saved_user", "saved_token");
 
-    const char* argv[] = {
+    std::array<std::string_view, 5> argv = {
         "aquarium-client", "--server",           "custom.prod.host:8443",
         "--token",         "cli_override_token",
     };
+
     int argc = sizeof(argv) / sizeof(argv[0]);
 
-    auto overrides =
-        ConfigManager::ParseCommandLine(argc, const_cast<char**>(argv));
+    auto overrides = ConfigManager::ParseCommandLine(argc, argv);
     EXPECT_EQ(overrides.server, "custom.prod.host:8443");
     EXPECT_EQ(overrides.token, "cli_override_token");
 
@@ -152,7 +152,6 @@ TEST_F(ConfigTest, EnvironmentVariableOverrides) {
     EXPECT_EQ(manager.GetActiveServer(), "env.host.local:50051");
     EXPECT_EQ(manager.GetActiveToken(), "env_tok_777");
 
-    // CLI overrides must take precedence over environment variables
     CliOverrides cli;
     cli.server = "cli.preferred.host:50051";
     manager.ApplyOverrides(cli);

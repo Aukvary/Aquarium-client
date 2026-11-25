@@ -6,6 +6,7 @@
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Aquarium::UI::Components {
@@ -57,7 +58,12 @@ Component CreateRemarksPane(const State::AppState& state,
             commentElements.push_back(text("No remarks for this task yet.") |
                                       dim | center);
         } else {
+            std::unordered_set<std::int64_t> seenCommentIds;
             for (const auto& comment : state.activeComments) {
+                if (comment.id() > 0 &&
+                    !seenCommentIds.insert(comment.id()).second) {
+                    continue;
+                }
                 Element badge;
                 bool isRevision =
                     comment.type() == CommentType::COMMENT_REVISION_REASON;

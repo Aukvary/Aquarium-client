@@ -14,23 +14,8 @@
 namespace Aquarium::Grpc {
 
 class EventSubscriber {
-public:
     using EventCallback = std::function<void(const aquarium::api::TaskEvent&)>;
     using ReconnectCallback = std::function<void()>;
-
-    EventSubscriber(std::shared_ptr<BackendClient> client,
-                    EventCallback eventCallback,
-                    ReconnectCallback reconnectCallback = nullptr);
-
-    ~EventSubscriber();
-
-    EventSubscriber(const EventSubscriber&) = delete;
-    EventSubscriber& operator=(const EventSubscriber&) = delete;
-
-    void Start();
-    void Stop();
-
-    [[nodiscard]] bool IsRunning() const noexcept;
 
 private:
     void RunLoop(std::stop_token stopToken);
@@ -44,6 +29,21 @@ private:
     std::jthread _workerThread;
     grpc::ClientContext* _activeContext{nullptr};
     bool _running{false};
+
+public:
+    EventSubscriber(std::shared_ptr<BackendClient> client,
+                    EventCallback eventCallback,
+                    ReconnectCallback reconnectCallback = nullptr);
+
+    ~EventSubscriber();
+
+    EventSubscriber(const EventSubscriber&) = delete;
+    EventSubscriber& operator=(const EventSubscriber&) = delete;
+
+    void Start();
+    void Stop();
+
+    [[nodiscard]] bool IsRunning() const noexcept;
 };
 
 } // namespace Aquarium::Grpc

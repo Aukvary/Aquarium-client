@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BackendClient.hpp"
+#include "./BackendClient.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -13,10 +13,23 @@
 namespace Aquarium::Grpc {
 
 class HealthChecker {
-public:
     using HealthCallback =
         std::function<void(const Result<aquarium::api::HealthResponse>&)>;
 
+private:
+    void RunLoop(std::stop_token stopToken);
+
+    std::shared_ptr<BackendClient> _client;
+    std::chrono::milliseconds _interval;
+    HealthCallback _callback;
+
+    std::mutex _mutex;
+    std::condition_variable_any _cv;
+    std::jthread _workerThread;
+    bool _running{false};
+    bool _triggerNow{false};
+
+public:
     HealthChecker(std::shared_ptr<BackendClient> client,
                   std::chrono::milliseconds interval,
                   HealthCallback callback);
@@ -31,19 +44,6 @@ public:
     void TriggerCheck();
 
     [[nodiscard]] bool IsRunning() const noexcept;
-
-private:
-    void RunLoop(std::stop_token stopToken);
-
-    std::shared_ptr<BackendClient> _client;
-    std::chrono::milliseconds _interval;
-    HealthCallback _callback;
-
-    std::mutex _mutex;
-    std::condition_variable_any _cv;
-    std::jthread _workerThread;
-    bool _running{false};
-    bool _triggerNow{false};
 };
 
 } // namespace Aquarium::Grpc

@@ -1,10 +1,12 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace Aquarium::Config {
@@ -41,12 +43,19 @@ struct CliOverrides {
 };
 
 class ConfigManager {
+private:
+    std::filesystem::path _configPath;
+    ClientConfig _config;
+    CliOverrides _overrides;
+
 public:
     explicit ConfigManager(
         std::filesystem::path configPath = GetDefaultConfigPath());
 
     [[nodiscard]] static std::filesystem::path GetDefaultConfigPath();
-    [[nodiscard]] static CliOverrides ParseCommandLine(int argc, char* argv[]);
+    template <std::size_t COUNT>
+    [[nodiscard]] static CliOverrides
+    ParseCommandLine(int argc, std::array<std::string_view, COUNT> argv);
 
     bool Load();
     bool Save();
@@ -65,11 +74,6 @@ public:
                              std::string token);
 
     [[nodiscard]] const std::filesystem::path& GetConfigPath() const noexcept;
-
-private:
-    std::filesystem::path _configPath;
-    ClientConfig _config;
-    CliOverrides _overrides;
 };
 
 } // namespace Aquarium::Config

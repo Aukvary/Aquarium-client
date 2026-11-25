@@ -1,5 +1,6 @@
 #include "Common/TimeUtils.hpp"
 #include "State/AppState.hpp"
+#include "State/Reducer.hpp"
 #include "UI/Components/RemarksPane.hpp"
 #include "UI/Components/StatusBar.hpp"
 #include "UI/Components/TaskDetailsPane.hpp"
@@ -359,6 +360,50 @@ TEST(UiComponentsTest, CreateTaskViewRendersFormAndHandlesValidation) {
     EXPECT_TRUE(navigatedBack);
 }
 
+TEST(UiComponentsTest, CreateTaskViewDynamicSessionAndAuthValidation) {
+    AppState state;
+    state.session.userId = 0; // Unauthenticated at startup
+
+    auto comp = Views::CreateCreateTaskView(
+        state, [](const State::Action&) {}, nullptr);
+
+    // Type a title
+    for (char c : std::string("Task Alpha")) {
+        comp->OnEvent(Event::Character(c));
+    }
+
+    // Navigate down to 'Create Task' button
+    for (int i = 0; i < 6; ++i) {
+        comp->OnEvent(Event::ArrowDown);
+    }
+
+    // Press Return on Create Task button while unauthenticated
+    comp->OnEvent(Event::Return);
+
+    auto screen = Screen::Create(Dimension::Fixed(100), Dimension::Fixed(30));
+    auto elem = comp->Render();
+    Render(screen, elem);
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("Cannot create task: unauthenticated user"),
+              std::string::npos);
+
+    // Now dynamically authenticate (as happens when AuthModal finishes)
+    state.session.userId = 2;
+    state.session.userName = "aukvary";
+
+    // Press Return again: view must dynamically see updated userId
+    comp->OnEvent(Event::Return);
+    elem = comp->Render();
+    Render(screen, elem);
+    rendered = screen.ToString();
+
+    EXPECT_EQ(rendered.find("Cannot create task: unauthenticated user"),
+              std::string::npos);
+    EXPECT_NE(rendered.find("Cannot create task: offline or client missing"),
+              std::string::npos);
+}
+
 TEST(UiComponentsTest, TimeUtilsParseDate) {
     auto valid = Common::ParseDate("2026-11-20");
     ASSERT_TRUE(valid.has_value());
@@ -381,6 +426,75 @@ TEST(UiComponentsTest, TerminalTooSmallWarningRendersProperly) {
               std::string::npos);
     EXPECT_NE(rendered.find("Current size: 60x15"), std::string::npos);
     EXPECT_NE(rendered.find("Minimum required size: 80x24"), std::string::npos);
+}
+
+TEST(UiComponentsTest, TaskBoardViewSearchQueryInputAndBackspaceRestoresTasks) {
+    AppState state;
+    Task t1;
+    t1.set_id(1);
+    t1.set_title("First task");
+    t1.set_status(TaskStatus::ACTIVE);
+
+    Task t2;
+    t2.set_id(2);
+    t2.set_title("Second task");
+    t2.set_status(TaskStatus::IN_REVIEW);
+
+    state.tasks = {t1, t2};
+    state.selectedTaskId = 1;
+
+    auto dispatch = [&](const State::Action& a) {
+        state = State::Reducer::Reduce(state, a);
+    };
+
+    auto comp = Views::CreateTaskBoardView(state, dispatch, nullptr);
+
+    // Initial render: both tasks visible
+    auto screen = Screen::Create(Dimension::Fixed(160), Dimension::Fixed(25));
+    Render(screen, comp->Render());
+    std::string rendered = screen.ToString();
+    EXPECT_NE(rendered.find("First task"), std::string::npos);
+    EXPECT_NE(rendered.find("Second task"), std::string::npos);
+
+    // Press '/' to focus search field
+    EXPECT_TRUE(comp->OnEvent(Event::Character('/')));
+    EXPECT_TRUE(state.filter.searchQuery.empty());
+
+    // Type "First" into search
+    for (char c : std::string("First")) {
+        comp->OnEvent(Event::Character(c));
+    }
+    EXPECT_EQ(state.filter.searchQuery, "First");
+
+    // Re-render: only First task should be visible
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("First task"), std::string::npos);
+    EXPECT_EQ(rendered.find("Second task"), std::string::npos);
+
+    // Erase characters using Backspace until empty
+    for (size_t i = 0; i < 5; ++i) {
+        comp->OnEvent(Event::Backspace);
+    }
+    EXPECT_TRUE(state.filter.searchQuery.empty());
+
+    // Re-render: BOTH tasks must be restored and displayed!
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("First task"), std::string::npos);
+    EXPECT_NE(rendered.find("Second task"), std::string::npos);
+
+    // Press Return to unfocus search field
+    comp->OnEvent(Event::Return);
+
+    // Navigate between tasks using 'j' (down) and 'k' (up)
+    EXPECT_TRUE(comp->OnEvent(Event::Character('j')));
+    EXPECT_EQ(state.selectedTaskId, 2);
+
+    EXPECT_TRUE(comp->OnEvent(Event::Character('k')));
+    EXPECT_EQ(state.selectedTaskId, 1);
 }
 
 } // namespace Aquarium::UI::Tests

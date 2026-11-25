@@ -11,6 +11,7 @@
 #include <ftxui/dom/elements.hpp>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -36,28 +37,6 @@ Component CreateReviewView(const State::AppState& state,
         }
     };
 
-    // Filter tasks awaiting review
-    std::vector<const Task*> reviewTasks;
-    for (const auto& task : state.tasks) {
-        if (task.status() == TaskStatus::IN_REVIEW) {
-            reviewTasks.push_back(&task);
-        }
-    }
-
-    // Determine currently selected review task
-    const Task* activeReviewTask = nullptr;
-    if (state.selectedTaskId.has_value()) {
-        for (const auto* t : reviewTasks) {
-            if (t->id() == *state.selectedTaskId) {
-                activeReviewTask = t;
-                break;
-            }
-        }
-    }
-    if (activeReviewTask == nullptr && !reviewTasks.empty()) {
-        activeReviewTask = reviewTasks.front();
-    }
-
     // Center Details Pane (display-only or with standard actions)
     auto detailsPane = Components::CreateTaskDetailsPane(state);
 
@@ -72,11 +51,12 @@ Component CreateReviewView(const State::AppState& state,
 
     auto btnApprove = Button(
         "✓ Approve & Verify",
-        [activeReviewTask, dispatch, client] {
-            if (activeReviewTask == nullptr || !client) {
+        [&state, dispatch, client] {
+            auto task = state.GetSelectedTask();
+            if (task == nullptr || !client) {
                 return;
             }
-            auto taskId = activeReviewTask->id();
+            auto taskId = task->id();
             auto res = client->UpdateTaskStatus(taskId, TaskStatus::VERIFIED);
             if (res.HasValue()) {
                 dispatch(State::TaskStatusChangedAction{
@@ -99,9 +79,9 @@ Component CreateReviewView(const State::AppState& state,
 
     auto btnReject = Button(
         "✗ Reject with Reason",
-        [activeReviewTask, dispatch, client, revisionReasonModel,
-         reasonErrorModel] {
-            if (activeReviewTask == nullptr || !client) {
+        [&state, dispatch, client, revisionReasonModel, reasonErrorModel] {
+            auto task = state.GetSelectedTask();
+            if (task == nullptr || !client) {
                 return;
             }
             if (revisionReasonModel->empty()) {
@@ -113,7 +93,7 @@ Component CreateReviewView(const State::AppState& state,
                 return;
             }
             reasonErrorModel->clear();
-            auto taskId = activeReviewTask->id();
+            auto taskId = task->id();
             auto res = client->RejectTask(taskId, *revisionReasonModel);
             if (res.HasValue()) {
                 dispatch(State::TaskRejectedAction{
@@ -138,8 +118,8 @@ Component CreateReviewView(const State::AppState& state,
     // Remarks pane for comment history & discussion
     Components::RemarksCallbacks remarksCallbacks{
         .onAddComment =
-            [state, dispatch, client](std::int64_t taskId,
-                                      const std::string& content) {
+            [&state, dispatch, client](std::int64_t taskId,
+                                       const std::string& content) {
                 if (!client) {
                     return;
                 }
@@ -220,13 +200,21 @@ Component CreateReviewView(const State::AppState& state,
 
     // Left Column: Review Task List
     auto dummyLeft = Container::Vertical({});
-    auto leftRenderer = Renderer(dummyLeft, [&state, reviewTasks] {
+    auto leftRenderer = Renderer(dummyLeft, [&state] {
+        std::vector<const Task*> currentReviewTasks;
+        std::unordered_set<std::int64_t> seenIds;
+        for (const auto& task : state.tasks) {
+            if (task.status() == TaskStatus::IN_REVIEW &&
+                seenIds.insert(task.id()).second) {
+                currentReviewTasks.push_back(&task);
+            }
+        }
         Elements taskRows;
-        if (reviewTasks.empty()) {
+        if (currentReviewTasks.empty()) {
             taskRows.push_back(text("No tasks awaiting review.") | dim |
                                center);
         } else {
-            for (const auto* task : reviewTasks) {
+            for (const auto* task : currentReviewTasks) {
                 bool isSelected = state.selectedTaskId.has_value() &&
                                   *state.selectedTaskId == task->id();
 
@@ -253,8 +241,8 @@ Component CreateReviewView(const State::AppState& state,
         auto taskListArea = vbox(std::move(taskRows)) | yframe | flex;
 
         return vbox({
-                   text("IN REVIEW (" + std::to_string(reviewTasks.size()) +
-                        ")") |
+                   text("IN REVIEW (" +
+                        std::to_string(currentReviewTasks.size()) + ")") |
                        bold | color(Color::YellowLight) | center,
                    separator(),
                    taskListArea,
@@ -279,39 +267,54 @@ Component CreateReviewView(const State::AppState& state,
             });
         });
 
-    return CatchEvent(fullLayout, [reviewTasks, state,
+    return CatchEvent(fullLayout, [&state, rightRenderer,
                                    selectTaskAndFetchComments](Event event) {
+        // If typing in revision reason or remarks pane, do not intercept
+        // hotkeys
+        if (rightRenderer->Focused()) {
+            return false;
+        }
+
+        std::vector<const Task*> currentReviewTasks;
+        std::unordered_set<std::int64_t> seenIds;
+        for (const auto& task : state.tasks) {
+            if (task.status() == TaskStatus::IN_REVIEW &&
+                seenIds.insert(task.id()).second) {
+                currentReviewTasks.push_back(&task);
+            }
+        }
         // Navigation: 'j' or Down key: select next review task
         if (event == Event::Character('j') || event == Event::ArrowDown) {
-            if (!reviewTasks.empty()) {
+            if (!currentReviewTasks.empty()) {
                 int currentIndex = -1;
-                for (size_t i = 0; i < reviewTasks.size(); ++i) {
+                for (size_t i = 0; i < currentReviewTasks.size(); ++i) {
                     if (state.selectedTaskId.has_value() &&
-                        reviewTasks[i]->id() == *state.selectedTaskId) {
+                        currentReviewTasks[i]->id() == *state.selectedTaskId) {
                         currentIndex = static_cast<int>(i);
                         break;
                     }
                 }
-                int nextIndex = std::min(
-                    currentIndex + 1, static_cast<int>(reviewTasks.size() - 1));
-                selectTaskAndFetchComments(reviewTasks[nextIndex]->id());
+                int nextIndex =
+                    std::min(currentIndex + 1,
+                             static_cast<int>(currentReviewTasks.size() - 1));
+                selectTaskAndFetchComments(currentReviewTasks[nextIndex]->id());
                 return true;
             }
         }
 
         // Navigation: 'k' or Up key: select prev review task
         if (event == Event::Character('k') || event == Event::ArrowUp) {
-            if (!reviewTasks.empty()) {
+            if (!currentReviewTasks.empty()) {
                 int currentIndex = 0;
-                for (size_t i = 0; i < reviewTasks.size(); ++i) {
+                for (size_t i = 0; i < currentReviewTasks.size(); ++i) {
                     if (state.selectedTaskId.has_value() &&
-                        reviewTasks[i]->id() == *state.selectedTaskId) {
+                        currentReviewTasks[i]->id() == *state.selectedTaskId) {
                         currentIndex = static_cast<int>(i);
                         break;
                     }
                 }
                 int prevIndex = std::max(currentIndex - 1, 0);
-                selectTaskAndFetchComments(reviewTasks[prevIndex]->id());
+                selectTaskAndFetchComments(currentReviewTasks[prevIndex]->id());
                 return true;
             }
         }

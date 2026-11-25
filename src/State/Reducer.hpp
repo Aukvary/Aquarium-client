@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Actions.hpp"
-#include "AppState.hpp"
+#include "./Actions.hpp"
+#include "./AppState.hpp"
 
 namespace Aquarium::State {
 

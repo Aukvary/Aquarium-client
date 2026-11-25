@@ -1,9 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
 
-if(POLICY CMP0135)
-  cmake_policy(SET CMP0135 NEW)
-endif()
-
 project(aquarium-client CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -11,16 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if(MSVC)
-  add_compile_options(/W4 /permissive-)
-else()
-  add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
+add_compile_options(-Wall -Wextra -Wpedantic)
 
-# Dependencies
 include(FetchContent)
 
-# FTXUI (TUI Framework)
 FetchContent_Declare(
   ftxui
   GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
@@ -28,7 +18,6 @@ FetchContent_Declare(
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(ftxui)
 
-# nlohmann_json
 find_package(nlohmann_json CONFIG QUIET)
 if(NOT nlohmann_json_FOUND)
   FetchContent_Declare(
@@ -37,7 +26,6 @@ if(NOT nlohmann_json_FOUND)
   FetchContent_MakeAvailable(nlohmann_json)
 endif()
 
-# GoogleTest
 find_package(GTest QUIET)
 if(NOT GTest_FOUND)
   FetchContent_Declare(
@@ -48,11 +36,9 @@ if(NOT GTest_FOUND)
   FetchContent_MakeAvailable(googletest)
 endif()
 
-# Protobuf & gRPC
 find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 
-# Proto Generation from Aquarium-server/proto
 set(PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Aquarium-server/proto")
 set(PROTO_FILES
     "${PROTO_DIR}/TaskStoreService.proto" "${PROTO_DIR}/UserStoreService.proto"
@@ -107,7 +93,6 @@ endif()
 target_link_libraries(aquarium-client-proto PUBLIC protobuf::libprotobuf
                                                    gRPC::grpc++)
 
-# Core Client Library
 add_library(
   aquarium-client-core STATIC
   src/Config/ConfigManager.cpp
@@ -138,17 +123,13 @@ target_link_libraries(
          gRPC::grpc++
          protobuf::libprotobuf)
 
-# Main Client Executable
 add_executable(aquarium-client src/main.cpp)
 
 target_include_directories(aquarium-client
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_link_libraries(
-  aquarium-client
-  PRIVATE aquarium-client-core)
+target_link_libraries(aquarium-client PRIVATE aquarium-client-core)
 
-# Testing Targets
 enable_testing()
 
 add_executable(
@@ -159,10 +140,8 @@ target_include_directories(aquarium-client-unittest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_link_libraries(
-  aquarium-client-unittest
-  PRIVATE aquarium-client-core
-          GTest::gtest
-          GTest::gtest_main)
+  aquarium-client-unittest PRIVATE aquarium-client-core GTest::gtest
+                                   GTest::gtest_main)
 
 include(GoogleTest)
 gtest_discover_tests(aquarium-client-unittest)

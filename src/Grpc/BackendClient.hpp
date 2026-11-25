@@ -30,6 +30,17 @@ struct GetTasksFilter {
 AppError MapGrpcStatus(const grpc::Status& status);
 
 class BackendClient {
+private:
+    void InitStubs(std::shared_ptr<grpc::ChannelInterface> channel);
+
+    std::string _targetServer;
+    std::string _authToken;
+    std::shared_ptr<grpc::ChannelInterface> _channel;
+
+    std::unique_ptr<aquarium::api::UtilsService::Stub> _utilsStub;
+    std::unique_ptr<aquarium::api::UserStoreService::Stub> _userStub;
+    std::unique_ptr<aquarium::api::TaskStoreService::Stub> _taskStub;
+
 public:
     explicit BackendClient(const std::string& targetServer,
                            std::string authToken = "");
@@ -51,11 +62,9 @@ public:
     [[nodiscard]] std::unique_ptr<grpc::ClientContext>
     CreateStreamContext() const;
 
-    // UtilsService RPCs
     [[nodiscard]] Result<aquarium::api::HealthResponse>
     Health(std::chrono::milliseconds timeout = std::chrono::milliseconds(3000));
 
-    // UserStoreService RPCs
     [[nodiscard]] Result<std::vector<aquarium::api::User>> GetAllUsers();
     [[nodiscard]] Result<aquarium::api::User> GetUser(std::int64_t userId);
     [[nodiscard]] Result<aquarium::api::User>
@@ -64,7 +73,6 @@ public:
     UpdateUser(std::int64_t userId, const std::string& newName);
     [[nodiscard]] Result<bool> DeleteUser(std::int64_t userId);
 
-    // TaskStoreService RPCs
     [[nodiscard]] Result<aquarium::api::GetTasksResponse>
     GetTasks(const GetTasksFilter& filter = {});
     [[nodiscard]] Result<aquarium::api::Task> GetTask(std::int64_t taskId);
@@ -80,7 +88,6 @@ public:
     RemoveWorker(std::int64_t taskId, std::int64_t workerId);
     [[nodiscard]] Result<bool> DeleteTask(std::int64_t taskId);
 
-    // Remarks & Comments
     [[nodiscard]] Result<std::vector<aquarium::api::Comment>>
     GetComments(std::int64_t taskId);
     [[nodiscard]] Result<aquarium::api::Comment>
@@ -92,20 +99,8 @@ public:
     [[nodiscard]] Result<aquarium::api::RejectTaskResponse>
     RejectTask(std::int64_t taskId, const std::string& reason);
 
-    // Streaming
     [[nodiscard]] std::unique_ptr<grpc::ClientReader<aquarium::api::TaskEvent>>
     SubscribeEvents(grpc::ClientContext* context);
-
-private:
-    void InitStubs(std::shared_ptr<grpc::ChannelInterface> channel);
-
-    std::string _targetServer;
-    std::string _authToken;
-    std::shared_ptr<grpc::ChannelInterface> _channel;
-
-    std::unique_ptr<aquarium::api::UtilsService::Stub> _utilsStub;
-    std::unique_ptr<aquarium::api::UserStoreService::Stub> _userStub;
-    std::unique_ptr<aquarium::api::TaskStoreService::Stub> _taskStub;
 };
 
 } // namespace Aquarium::Grpc

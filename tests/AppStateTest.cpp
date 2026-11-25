@@ -53,17 +53,14 @@ TEST_F(AppStateTest, TaskSelectionAndCommentClearing) {
     c.set_content("Remark");
     _state.activeComments.push_back(c);
 
-    // Re-selecting the same task does not clear comments
     _state = Reducer::Reduce(_state, SelectTaskAction{1});
     EXPECT_EQ(_state.selectedTaskId, 1);
     EXPECT_EQ(_state.activeComments.size(), 1);
 
-    // Selecting a different task clears comments
     _state = Reducer::Reduce(_state, SelectTaskAction{2});
     EXPECT_EQ(_state.selectedTaskId, 2);
     EXPECT_TRUE(_state.activeComments.empty());
 
-    // Deselecting task
     _state = Reducer::Reduce(_state, SelectTaskAction{std::nullopt});
     EXPECT_FALSE(_state.selectedTaskId.has_value());
 }
@@ -132,7 +129,6 @@ TEST_F(AppStateTest, TasksLoadedAutoSelectsFirstTask) {
     ASSERT_TRUE(_state.selectedTaskId.has_value());
     EXPECT_EQ(*_state.selectedTaskId, 101);
 
-    // If selected task is removed in new list, fallback to first task
     _state.selectedTaskId = 999;
     _state = Reducer::Reduce(_state, TasksLoadedAction{{t2}});
     EXPECT_EQ(_state.tasks.size(), 1);
@@ -148,12 +144,10 @@ TEST_F(AppStateTest, CommentsAndUsersLoaded) {
     c1.set_taskid(50);
     c1.set_content("Remark for 50");
 
-    // Comments for non-selected task should be ignored
     _state = Reducer::Reduce(
         _state, CommentsLoadedAction{.taskId = 40, .comments = {c1}});
     EXPECT_TRUE(_state.activeComments.empty());
 
-    // Comments for selected task loaded
     _state = Reducer::Reduce(
         _state, CommentsLoadedAction{.taskId = 50, .comments = {c1}});
     EXPECT_EQ(_state.activeComments.size(), 1);
@@ -175,24 +169,23 @@ TEST_F(AppStateTest, TaskMutationActions) {
     t.set_title("Initial title");
     t.set_status(TaskStatus::PLAN);
 
-    // 1. TaskCreated prepends to task list
     _state = Reducer::Reduce(_state, TaskCreatedAction{t});
     ASSERT_EQ(_state.tasks.size(), 1);
     EXPECT_EQ(_state.tasks[0].id(), 10);
     EXPECT_EQ(_state.selectedTaskId, 10);
 
-    // 2. TaskUpdated modifies matching task
+    _state = Reducer::Reduce(_state, TaskCreatedAction{t});
+    EXPECT_EQ(_state.tasks.size(), 1);
+
     t.set_title("Updated title");
     _state = Reducer::Reduce(_state, TaskUpdatedAction{t});
     EXPECT_EQ(_state.tasks[0].title(), "Updated title");
 
-    // 3. TaskStatusChanged modifies status
     _state = Reducer::Reduce(
         _state,
         TaskStatusChangedAction{.taskId = 10, .newStatus = TaskStatus::ACTIVE});
     EXPECT_EQ(_state.tasks[0].status(), TaskStatus::ACTIVE);
 
-    // 4. CommentAdded appends to activeComments if matching selected task
     Comment c;
     c.set_id(100);
     c.set_taskid(10);
@@ -201,7 +194,9 @@ TEST_F(AppStateTest, TaskMutationActions) {
     ASSERT_EQ(_state.activeComments.size(), 1);
     EXPECT_EQ(_state.activeComments[0].id(), 100);
 
-    // 5. TaskRejected updates task status to ACTIVE and appends comment
+    _state = Reducer::Reduce(_state, CommentAddedAction{c});
+    EXPECT_EQ(_state.activeComments.size(), 1);
+
     t.set_status(TaskStatus::ACTIVE);
     Comment rejComment;
     rejComment.set_id(101);
@@ -215,7 +210,6 @@ TEST_F(AppStateTest, TaskMutationActions) {
     EXPECT_EQ(_state.activeComments.size(), 2);
     EXPECT_EQ(_state.activeComments.back().content(), "Please revise");
 
-    // 6. TaskDeleted removes task
     _state = Reducer::Reduce(_state, TaskDeletedAction{10});
     EXPECT_TRUE(_state.tasks.empty());
     EXPECT_FALSE(_state.selectedTaskId.has_value());
@@ -240,34 +234,52 @@ TEST_F(AppStateTest, GetFilteredTasksLogic) {
 
     _state.tasks = {t1, t2, t3};
 
-    // No filters -> all 3
     EXPECT_EQ(_state.GetFilteredTasks().size(), 3);
 
-    // Filter by status ACTIVE -> 1
     _state.filter.statusFilter = TaskStatus::ACTIVE;
     auto activeTasks = _state.GetFilteredTasks();
     ASSERT_EQ(activeTasks.size(), 1);
     EXPECT_EQ(activeTasks[0]->id(), 1);
     _state.filter.statusFilter = std::nullopt;
 
-    // ReviewView automatically filters for IN_REVIEW
     _state.currentView = ViewType::Review;
     auto reviewTasks = _state.GetFilteredTasks();
     ASSERT_EQ(reviewTasks.size(), 1);
     EXPECT_EQ(reviewTasks[0]->id(), 2);
     _state.currentView = ViewType::Tasks;
 
-    // Search query by title (case-insensitive)
     _state.filter.searchQuery = "GRPC";
     auto searchRes = _state.GetFilteredTasks();
     ASSERT_EQ(searchRes.size(), 1);
     EXPECT_EQ(searchRes[0]->id(), 1);
 
-    // Search query by ID
     _state.filter.searchQuery = "3";
     auto idRes = _state.GetFilteredTasks();
     ASSERT_EQ(idRes.size(), 1);
     EXPECT_EQ(idRes[0]->id(), 3);
+
+    t1.set_description("Client networking in C++");
+    _state.tasks[0] = t1;
+    _state.filter.searchQuery = "networking";
+    EXPECT_EQ(_state.GetFilteredTasks().size(), 1);
+
+    Task tRu;
+    tRu.set_id(4);
+    tRu.set_title("Тестовая задача");
+    tRu.set_description("Описание задачи");
+    _state.tasks.push_back(tRu);
+    _state.filter.searchQuery = "ТЕСТОВАЯ";
+    auto ruRes = _state.GetFilteredTasks();
+    ASSERT_EQ(ruRes.size(), 1);
+    EXPECT_EQ(ruRes[0]->id(), 4);
+
+    _state.tasks.push_back(tRu);
+    _state.filter.searchQuery = "задача";
+    auto dedupRes = _state.GetFilteredTasks();
+    EXPECT_EQ(dedupRes.size(), 1);
+
+    _state.filter.searchQuery = "   ";
+    EXPECT_EQ(_state.GetFilteredTasks().size(), 4);
 }
 
 } // namespace Aquarium::State::Tests

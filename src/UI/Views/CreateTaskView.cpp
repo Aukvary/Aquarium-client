@@ -52,7 +52,7 @@ CreateCreateTaskView(const State::AppState& state,
         }
     });
 
-    auto submitForm = [state, dispatch, client, titleModel, descModel,
+    auto submitForm = [&state, dispatch, client, titleModel, descModel,
                        workersModel, checkerModel, dueDateModel, statusModel,
                        errorModel] {
         if (titleModel->empty()) {
@@ -60,10 +60,16 @@ CreateCreateTaskView(const State::AppState& state,
             return;
         }
 
+        if (state.session.userId <= 0) {
+            *errorModel =
+                "Cannot create task: unauthenticated user. Please log in.";
+            return;
+        }
+
         CreateTaskRequest req;
         req.set_title(*titleModel);
         req.set_description(*descModel);
-        req.set_authorid(state.session.userId > 0 ? state.session.userId : 1);
+        req.set_authorid(state.session.userId);
         req.set_status(*statusModel);
 
         // Parse workers (comma-separated list of IDs)
