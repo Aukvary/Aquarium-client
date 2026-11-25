@@ -12,7 +12,7 @@ namespace Aquarium::Common {
 using TaskId = std::int64_t;
 using UserId = std::int64_t;
 
-enum class AppErrorCode {
+enum class AppErrorCode : std::uint8_t {
     OK = 0,
     UNAUTHENTICATED,
     PERMISSION_DENIED,

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AppState.hpp"
+#include "./AppState.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -53,6 +53,8 @@ struct SetSessionAction {
     std::string userName;
     std::string token;
 };
+
+struct ExitProjectAction {};
 
 struct SetLoadingTasksAction {
     bool loading{false};
@@ -115,6 +117,7 @@ using Action = std::variant<NavigateToViewAction,
                             DismissToastAction,
                             SetConnectionStatusAction,
                             SetSessionAction,
+                            ExitProjectAction,
                             SetLoadingTasksAction,
                             TasksLoadedAction,
                             SetLoadingCommentsAction,

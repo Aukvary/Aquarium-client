@@ -29,20 +29,6 @@
   - **nlohmann_json** (`v3.11.3`)
   - **GoogleTest** (`v1.14.0`)
 
-### Расположение репозиториев
-
-При сборке клиент генерирует C++ и gRPC исходники напрямую из `.proto`-файлов сервера (`../Aquarium-server/proto`), поэтому репозитории должны располагаться рядом в одной директории:
-
-```text
-Aquarium/
-├── Aquarium-client/
-└── Aquarium-server/
-    └── proto/
-        ├── TaskStoreService.proto
-        ├── UserStoreService.proto
-        └── UtilsService.proto
-```
-
 ---
 
 ## Сборка и тестирование
@@ -50,10 +36,11 @@ Aquarium/
 ### 1. Клонирование
 
 ```bash
-git clone https://github.com/Aukvary/Aquarium-server.git
 git clone https://github.com/Aukvary/Aquarium-client.git
 cd Aquarium-client
 ```
+
+Все необходимые `.proto`-контракты (`TaskStoreService.proto`, `UserStoreService.proto`, `UtilsService.proto`) включены в директорию [proto/](proto/), поэтому клонировать репозиторий сервера для сборки не требуется.
 
 ### 2. Конфигурация и сборка
 

@@ -9,7 +9,8 @@
 namespace Aquarium::UI::Components {
 
 struct TaskDetailsCallbacks {
-    std::function<void(std::int64_t taskId)> onChangeStatus;
+    std::function<void(std::int64_t taskId)> onPassTask;
+    std::function<void(std::int64_t taskId)> onToggleArchive;
     std::function<void(std::int64_t taskId)> onAssignWorker;
     std::function<void(std::int64_t taskId)> onDeleteTask;
 };

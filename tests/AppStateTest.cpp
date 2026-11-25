@@ -282,4 +282,48 @@ TEST_F(AppStateTest, GetFilteredTasksLogic) {
     EXPECT_EQ(_state.GetFilteredTasks().size(), 4);
 }
 
+TEST_F(AppStateTest, ExitProjectClearsSessionAndDataAndOpensProjectModal) {
+    _state = Reducer::Reduce(_state, SetSessionAction{
+                                         .server = "localhost:8081",
+                                         .userId = 10,
+                                         .userName = "alice",
+                                         .token = "tok_123",
+                                     });
+    _state = Reducer::Reduce(
+        _state, SetConnectionStatusAction{ConnectionStatus::Connected});
+    _state = Reducer::Reduce(_state, NavigateToViewAction{ViewType::Review});
+    _state = Reducer::Reduce(_state, SetSearchQueryAction{"bug"});
+
+    Task t;
+    t.set_id(1);
+    t.set_title("Fix bug");
+    _state = Reducer::Reduce(_state, TaskCreatedAction{t});
+
+    User u;
+    u.set_id(10);
+    u.set_name("alice");
+    _state = Reducer::Reduce(_state, UsersLoadedAction{{u}});
+
+    Comment c;
+    c.set_id(1);
+    c.set_taskid(1);
+    c.set_content("Hello");
+    _state = Reducer::Reduce(_state, CommentAddedAction{c});
+
+    _state = Reducer::Reduce(_state, ExitProjectAction{});
+
+    EXPECT_FALSE(_state.session.IsAuthenticated());
+    EXPECT_TRUE(_state.session.serverHost.empty());
+    EXPECT_EQ(_state.session.userId, 0);
+    EXPECT_TRUE(_state.session.userName.empty());
+    EXPECT_TRUE(_state.tasks.empty());
+    EXPECT_FALSE(_state.selectedTaskId.has_value());
+    EXPECT_TRUE(_state.activeComments.empty());
+    EXPECT_TRUE(_state.users.empty());
+    EXPECT_TRUE(_state.filter.searchQuery.empty());
+    EXPECT_EQ(_state.connectionStatus, ConnectionStatus::Offline);
+    EXPECT_EQ(_state.currentView, ViewType::Tasks);
+    EXPECT_EQ(_state.activeModal, ModalType::ProjectModal);
+}
+
 } // namespace Aquarium::State::Tests

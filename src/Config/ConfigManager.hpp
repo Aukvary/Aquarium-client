@@ -1,13 +1,13 @@
 #pragma once
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace Aquarium::Config {
 
@@ -17,6 +17,13 @@ struct ServerEntry {
     std::string authToken;
 
     bool operator==(const ServerEntry& other) const = default;
+};
+
+struct SavedProject {
+    std::string server;
+    ServerEntry entry;
+
+    bool operator==(const SavedProject& other) const = default;
 };
 
 void to_json(nlohmann::json& j, const ServerEntry& entry);
@@ -53,9 +60,10 @@ public:
         std::filesystem::path configPath = GetDefaultConfigPath());
 
     [[nodiscard]] static std::filesystem::path GetDefaultConfigPath();
-    template <std::size_t COUNT>
     [[nodiscard]] static CliOverrides
-    ParseCommandLine(int argc, std::array<std::string_view, COUNT> argv);
+    ParseCommandLine(std::span<const std::string_view> args);
+    [[nodiscard]] static CliOverrides
+    ParseCommandLine(int argc, std::span<const std::string_view> argv);
 
     bool Load();
     bool Save();
@@ -72,6 +80,14 @@ public:
     bool UpdateActiveSession(std::int64_t userId,
                              std::string userName,
                              std::string token);
+
+    [[nodiscard]] std::vector<SavedProject> GetSavedProjects() const;
+    bool SaveProjectSession(const std::string& server,
+                            std::int64_t userId,
+                            std::string userName,
+                            std::string token);
+    bool SwitchActiveProject(const std::string& server);
+    bool RemoveProject(const std::string& server);
 
     [[nodiscard]] const std::filesystem::path& GetConfigPath() const noexcept;
 };

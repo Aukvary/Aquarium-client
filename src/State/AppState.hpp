@@ -19,6 +19,7 @@ enum class ViewType : std::uint8_t {
 enum class ModalType : std::uint8_t {
     None = 0,
     AuthModal,
+    ProjectModal,
     RejectTaskModal,
     ConfirmDialog,
 };

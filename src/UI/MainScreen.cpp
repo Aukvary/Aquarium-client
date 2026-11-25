@@ -6,6 +6,7 @@
 #include "UI/UIHelpers.hpp"
 #include "Views/AuthModal.hpp"
 #include "Views/CreateTaskView.hpp"
+#include "Views/ProjectModal.hpp"
 #include "Views/ReviewView.hpp"
 #include "Views/TaskBoardView.hpp"
 
@@ -31,16 +32,22 @@ class GlobalEventFilter : public ComponentBase {
 public:
     GlobalEventFilter(Component child,
                       std::function<void()> onQuit,
+                      std::function<void()> onProjectSwitch,
                       std::function<void(ViewType)> onNavigate,
                       std::function<void()> onEscape)
-        : _onQuit(std::move(onQuit)), _onNavigate(std::move(onNavigate)),
-          _onEscape(std::move(onEscape)) {
+        : _onQuit(std::move(onQuit)),
+          _onProjectSwitch(std::move(onProjectSwitch)),
+          _onNavigate(std::move(onNavigate)), _onEscape(std::move(onEscape)) {
         Add(std::move(child));
     }
 
     bool OnEvent(Event event) override {
         if (event == Event::Character('\x03')) {
             _onQuit();
+            return true;
+        }
+        if (event == Event::Character('\x10')) {
+            _onProjectSwitch();
             return true;
         }
 
@@ -75,6 +82,7 @@ public:
 
 private:
     std::function<void()> _onQuit;
+    std::function<void()> _onProjectSwitch;
     std::function<void(ViewType)> _onNavigate;
     std::function<void()> _onEscape;
 };
@@ -90,6 +98,10 @@ MainScreen::MainScreen(std::shared_ptr<Config::ConfigManager> configManager,
 }
 
 MainScreen::~MainScreen() {
+    if (_actionThread.joinable()) {
+        _actionThread.request_stop();
+        _actionThread.join();
+    }
     if (_healthChecker) {
         _healthChecker->Stop();
     }
@@ -108,16 +120,27 @@ void MainScreen::InitState() {
             _state.session.userName = session->userName;
         }
     }
-    _state.connectionStatus = State::ConnectionStatus::Connecting;
+    _state.connectionStatus = _state.session.IsAuthenticated()
+                                  ? State::ConnectionStatus::Connecting
+                                  : State::ConnectionStatus::Offline;
     if (!_state.session.IsAuthenticated()) {
-        _state.activeModal = State::ModalType::AuthModal;
-        _showAuthModal = true;
+        if (_configManager && !_configManager->GetSavedProjects().empty()) {
+            _state.session.serverHost.clear();
+            _state.activeModal = State::ModalType::ProjectModal;
+            _showProjectModal = true;
+        } else {
+            _state.activeModal = State::ModalType::AuthModal;
+            _showAuthModal = true;
+        }
     }
 }
 
 void MainScreen::StartHealthMonitoring() {
     if (!_backendClient) {
         return;
+    }
+    if (_healthChecker) {
+        _healthChecker->Stop();
     }
 
     _healthChecker = std::make_unique<Grpc::HealthChecker>(
@@ -233,6 +256,8 @@ void MainScreen::Dispatch(const Action& action) {
     _screen.Post([this, action] {
         _state = Reducer::Reduce(_state, action);
         _showAuthModal = (_state.activeModal == State::ModalType::AuthModal);
+        _showProjectModal =
+            (_state.activeModal == State::ModalType::ProjectModal);
         _activeTabIndex = static_cast<int>(_state.currentView);
     });
     _screen.PostEvent(Event::Custom);
@@ -247,6 +272,16 @@ ScreenInteractive& MainScreen::GetScreen() noexcept {
 }
 
 Element MainScreen::RenderHeader() const {
+    if (!_state.session.IsAuthenticated() &&
+        _state.session.serverHost.empty()) {
+        return hbox({
+                   text(" Aquarium TUI ") | bold | color(Color::CyanLight),
+                   text(" - No project selected (Ctrl+P to select)") | dim,
+                   filler(),
+               }) |
+               border;
+    }
+
     std::string userDisplay =
         _state.session.IsAuthenticated()
             ? _state.session.userName +
@@ -269,13 +304,20 @@ void MainScreen::FetchInitialData() {
     if (!_backendClient) {
         return;
     }
-    std::thread([this] {
+    const auto generation = _sessionGeneration.load();
+    std::thread([this, generation] {
         auto usersRes = _backendClient->GetAllUsers();
+        if (generation != _sessionGeneration.load()) {
+            return;
+        }
         if (usersRes.HasValue()) {
             Dispatch(State::UsersLoadedAction{usersRes.Value()});
         }
 
         auto tasksRes = _backendClient->GetTasks();
+        if (generation != _sessionGeneration.load()) {
+            return;
+        }
         if (tasksRes.HasValue()) {
             std::vector<aquarium::api::Task> tasksList;
             tasksList.reserve(tasksRes.Value().tasks_size());
@@ -287,6 +329,9 @@ void MainScreen::FetchInitialData() {
             if (!tasksList.empty()) {
                 auto firstId = tasksList.front().id();
                 auto commentsRes = _backendClient->GetComments(firstId);
+                if (generation != _sessionGeneration.load()) {
+                    return;
+                }
                 if (commentsRes.HasValue()) {
                     Dispatch(State::CommentsLoadedAction{
                         .taskId = firstId,
@@ -303,19 +348,197 @@ void MainScreen::FetchInitialData() {
     }).detach();
 }
 
+void MainScreen::ExitToProjectSelector() {
+    if (_state.activeModal == State::ModalType::ProjectModal &&
+        !_state.session.IsAuthenticated()) {
+        return;
+    }
+
+    ++_sessionGeneration;
+    _projectModalError.clear();
+
+    if (_healthChecker) {
+        _healthChecker->Stop();
+    }
+    if (_eventSubscriber) {
+        _eventSubscriber->Stop();
+    }
+    if (_backendClient) {
+        _backendClient->SetAuthToken("");
+    }
+
+    Dispatch(State::ExitProjectAction{});
+}
+
+void MainScreen::HandleSelectProject(const std::string& server) {
+    if (!_configManager || !_backendClient) {
+        return;
+    }
+
+    _projectModalError.clear();
+    if (!_configManager->SwitchActiveProject(server)) {
+        _projectModalError = "Project '" + server + "' not found in config.";
+        Dispatch(State::ShowToastAction{
+            .message = _projectModalError,
+            .severity = State::ToastSeverity::Error,
+        });
+        return;
+    }
+
+    auto session = _configManager->GetActiveSession();
+    if (!session.has_value() || session->authToken.empty()) {
+        _backendClient->SetTargetServer(server);
+        _backendClient->SetAuthToken("");
+        Dispatch(State::SetSessionAction{
+            .server = server,
+            .userId = 0,
+            .userName = "",
+            .token = "",
+        });
+        Dispatch(State::OpenModalAction{State::ModalType::AuthModal});
+        return;
+    }
+
+    ++_sessionGeneration;
+    if (_healthChecker) {
+        _healthChecker->Stop();
+    }
+    if (_eventSubscriber) {
+        _eventSubscriber->Stop();
+    }
+
+    _backendClient->SetTargetServer(server);
+    _backendClient->SetAuthToken(session->authToken);
+
+    Dispatch(State::SetSessionAction{
+        .server = server,
+        .userId = session->userId,
+        .userName = session->userName,
+        .token = session->authToken,
+    });
+    Dispatch(
+        State::SetConnectionStatusAction{State::ConnectionStatus::Connecting});
+    Dispatch(State::CloseModalAction{});
+    Dispatch(State::ShowToastAction{
+        .message = "Switched to project " + server,
+        .severity = State::ToastSeverity::Success,
+    });
+
+    StartHealthMonitoring();
+    StartEventSubscription();
+    FetchInitialData();
+}
+
+void MainScreen::HandleDeleteProject(const std::string& server,
+                                     bool forceLocal) {
+    if (!_configManager) {
+        return;
+    }
+
+    const auto& servers = _configManager->GetConfig().servers;
+    auto it = servers.find(server);
+    if (it == servers.end()) {
+        return;
+    }
+    const Config::ServerEntry entry = it->second;
+
+    if (forceLocal || entry.userId <= 0 || entry.authToken.empty()) {
+        _configManager->RemoveProject(server);
+        _projectModalError.clear();
+        Dispatch(State::ShowToastAction{
+            .message = "Project '" + server + "' removed from config.",
+            .severity = State::ToastSeverity::Info,
+        });
+        return;
+    }
+
+    if (_isDeletingProject.exchange(true)) {
+        return;
+    }
+    _projectModalError.clear();
+
+    if (_actionThread.joinable()) {
+        _actionThread.request_stop();
+        _actionThread.join();
+    }
+
+    _actionThread = std::jthread([this, server, entry](std::stop_token) {
+        Common::Result<bool> res = Common::AppError{
+            .code = Common::AppErrorCode::INTERNAL_ERROR,
+            .message = "Client unavailable",
+            .details = "",
+        };
+
+        if (_backendClient &&
+            _backendClient->GetTargetServer() == "custom_channel") {
+            _backendClient->SetAuthToken(entry.authToken);
+            res = _backendClient->DeleteUser(entry.userId);
+        } else {
+            Grpc::BackendClient deleteClient(server, entry.authToken);
+            res = deleteClient.DeleteUser(entry.userId);
+        }
+
+        _screen.Post([this, server, res] {
+            _isDeletingProject = false;
+            if (res.HasValue()) {
+                _configManager->RemoveProject(server);
+                _projectModalError.clear();
+                _state = Reducer::Reduce(
+                    _state,
+                    State::ShowToastAction{
+                        .message = "Project '" + server +
+                                   "' deleted and user removed from server.",
+                        .severity = State::ToastSeverity::Success,
+                    });
+            } else if (res.Error().code ==
+                           Common::AppErrorCode::UNAUTHENTICATED ||
+                       res.Error().code == Common::AppErrorCode::NOT_FOUND) {
+                _configManager->RemoveProject(server);
+                _projectModalError.clear();
+                _state = Reducer::Reduce(
+                    _state,
+                    State::ShowToastAction{
+                        .message = "Project '" + server +
+                                   "' removed (user inactive on server).",
+                        .severity = State::ToastSeverity::Info,
+                    });
+            } else {
+                _projectModalError =
+                    "Failed to delete user from server: " + res.Error().message;
+                _state = Reducer::Reduce(
+                    _state, State::ShowToastAction{
+                                .message = _projectModalError,
+                                .severity = State::ToastSeverity::Error,
+                            });
+            }
+        });
+        _screen.PostEvent(Event::Custom);
+    });
+}
+
 void MainScreen::HandleAuthSubmit(const std::string& server,
                                   const std::string& name,
                                   const std::string& inviteKey) {
     if (!_backendClient) {
         return;
     }
+
+    ++_sessionGeneration;
+    if (_healthChecker) {
+        _healthChecker->Stop();
+    }
+    if (_eventSubscriber) {
+        _eventSubscriber->Stop();
+    }
+
     _backendClient->SetTargetServer(server);
+    _backendClient->SetAuthToken("");
     auto res = _backendClient->AddUser(name, inviteKey);
     if (res.HasValue()) {
         auto user = res.Value();
         if (_configManager) {
-            _configManager->UpdateActiveSession(user.id(), user.name(),
-                                                user.key());
+            _configManager->SaveProjectSession(server, user.id(), user.name(),
+                                               user.key());
         }
         _backendClient->SetAuthToken(user.key());
 
@@ -325,13 +548,16 @@ void MainScreen::HandleAuthSubmit(const std::string& server,
             .userName = user.name(),
             .token = user.key(),
         });
+        Dispatch(State::SetConnectionStatusAction{
+            State::ConnectionStatus::Connecting});
         Dispatch(State::CloseModalAction{});
         Dispatch(State::ShowToastAction{
             .message = "Successfully registered as " + user.name() + "!",
             .severity = State::ToastSeverity::Success,
         });
-        FetchInitialData();
+        StartHealthMonitoring();
         StartEventSubscription();
+        FetchInitialData();
     } else {
         Dispatch(State::ShowToastAction{
             .message = "Registration failed: " + res.Error().message,
@@ -397,24 +623,81 @@ Component MainScreen::BuildLayout() {
             .onSubmit =
                 [this](const std::string& s, const std::string& n,
                        const std::string& k) { HandleAuthSubmit(s, n, k); },
-            .onCancel = [this] { Dispatch(State::CloseModalAction{}); },
+            .onCancel =
+                [this] {
+                    if (!_state.session.IsAuthenticated()) {
+                        Dispatch(State::OpenModalAction{
+                            State::ModalType::ProjectModal});
+                    } else {
+                        Dispatch(State::CloseModalAction{});
+                    }
+                },
         });
 
-    auto modalContainer = Modal(layoutRenderer, authModal, &_showAuthModal);
+    auto projectModal = Views::CreateProjectModal(
+        _state, Views::ProjectModalCallbacks{
+                    .getProjects =
+                        [this] {
+                            std::vector<Views::ProjectEntryView> result;
+                            if (_configManager) {
+                                auto saved = _configManager->GetSavedProjects();
+                                result.reserve(saved.size());
+                                for (const auto& p : saved) {
+                                    result.push_back(Views::ProjectEntryView{
+                                        .server = p.server,
+                                        .userId = p.entry.userId,
+                                        .userName = p.entry.userName,
+                                    });
+                                }
+                            }
+                            return result;
+                        },
+                    .onSelectProject =
+                        [this](const std::string& server) {
+                            HandleSelectProject(server);
+                        },
+                    .onAddProject =
+                        [this] {
+                            _projectModalError.clear();
+                            Dispatch(State::OpenModalAction{
+                                State::ModalType::AuthModal});
+                        },
+                    .onDeleteProject =
+                        [this](const std::string& server, bool forceLocal) {
+                            HandleDeleteProject(server, forceLocal);
+                        },
+                    .getErrorMessage = [this] { return _projectModalError; },
+                    .isBusy = [this] { return _isDeletingProject.load(); },
+                    .onClearError = [this] { _projectModalError.clear(); },
+                });
+
+    auto withAuthModal = Modal(layoutRenderer, authModal, &_showAuthModal);
+    auto modalContainer =
+        Modal(withAuthModal, projectModal, &_showProjectModal);
 
     return Make<GlobalEventFilter>(
         modalContainer, [this] { _screen.ExitLoopClosure()(); },
-        [this](ViewType v) { Dispatch(State::NavigateToViewAction{v}); },
+        [this] { ExitToProjectSelector(); },
+        [this](ViewType v) {
+            if (_state.activeModal == State::ModalType::None) {
+                Dispatch(State::NavigateToViewAction{v});
+            }
+        },
         [this] {
-            Dispatch(State::CloseModalAction{});
+            if (_state.activeModal != State::ModalType::ProjectModal &&
+                _state.activeModal != State::ModalType::AuthModal) {
+                Dispatch(State::CloseModalAction{});
+            }
             Dispatch(State::DismissToastAction{});
         });
 }
 
 void MainScreen::Run() {
-    StartHealthMonitoring();
-    StartEventSubscription();
-    FetchInitialData();
+    if (_state.session.IsAuthenticated()) {
+        StartHealthMonitoring();
+        StartEventSubscription();
+        FetchInitialData();
+    }
     auto rootComponent = BuildLayout();
     _screen.Loop(rootComponent);
 }

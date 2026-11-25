@@ -1,9 +1,8 @@
-#include "CreateTaskView.hpp"
+#include "./CreateTaskView.hpp"
 
 #include "Common/TimeUtils.hpp"
 #include "UI/UIHelpers.hpp"
 
-#include <algorithm>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>

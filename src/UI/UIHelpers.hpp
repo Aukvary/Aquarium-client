@@ -15,19 +15,19 @@ struct StatusBadge {
 inline StatusBadge GetStatusBadge(aquarium::api::TaskStatus status) {
     switch (status) {
     case aquarium::api::TaskStatus::PLAN:
-        return {"PLAN", ftxui::Color::GrayDark};
+        return {.text = "PLAN", .color = ftxui::Color::GrayDark};
     case aquarium::api::TaskStatus::ACTIVE:
-        return {"ACTIVE", ftxui::Color::Cyan};
+        return {.text = "ACTIVE", .color = ftxui::Color::Cyan};
     case aquarium::api::TaskStatus::IN_REVIEW:
-        return {"IN_REVIEW", ftxui::Color::YellowLight};
+        return {.text = "IN_REVIEW", .color = ftxui::Color::YellowLight};
     case aquarium::api::TaskStatus::COMPLETE:
-        return {"COMPLETE", ftxui::Color::GreenLight};
+        return {.text = "COMPLETE", .color = ftxui::Color::GreenLight};
     case aquarium::api::TaskStatus::VERIFIED:
-        return {"VERIFIED", ftxui::Color::MagentaLight};
+        return {.text = "VERIFIED", .color = ftxui::Color::MagentaLight};
     case aquarium::api::TaskStatus::ARCHIVE:
-        return {"ARCHIVE", ftxui::Color::GrayDark};
+        return {.text = "ARCHIVE", .color = ftxui::Color::GrayDark};
     default:
-        return {"UNSPECIFIED", ftxui::Color::Default};
+        return {.text = "UNSPECIFIED", .color = ftxui::Color::Default};
     }
 }
 
@@ -38,21 +38,20 @@ inline ftxui::Element RenderStatusBadge(aquarium::api::TaskStatus status) {
 }
 
 inline ftxui::Element RenderTerminalTooSmallWarning(int currentWidth,
-                                                   int currentHeight,
-                                                   int minWidth = 80,
-                                                   int minHeight = 24) {
+                                                    int currentHeight,
+                                                    int minWidth = 80,
+                                                    int minHeight = 24) {
     return ftxui::vbox({
                ftxui::filler(),
-               ftxui::text("WARNING: TERMINAL WINDOW TOO SMALL") |
-                   ftxui::bold | ftxui::color(ftxui::Color::RedLight) |
-                   ftxui::center,
+               ftxui::text("WARNING: TERMINAL WINDOW TOO SMALL") | ftxui::bold |
+                   ftxui::color(ftxui::Color::RedLight) | ftxui::center,
                ftxui::separator(),
                ftxui::text("Current size: " + std::to_string(currentWidth) +
                            "x" + std::to_string(currentHeight)) |
                    ftxui::center,
-               ftxui::text("Minimum required size: " +
-                           std::to_string(minWidth) + "x" +
-                           std::to_string(minHeight)) |
+               ftxui::text(
+                   "Minimum required size: " + std::to_string(minWidth) + "x" +
+                   std::to_string(minHeight)) |
                    ftxui::bold | ftxui::color(ftxui::Color::YellowLight) |
                    ftxui::center,
                ftxui::text("Please enlarge or maximize your terminal window.") |

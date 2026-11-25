@@ -8,6 +8,7 @@
 #include "UI/UIHelpers.hpp"
 #include "UI/Views/AuthModal.hpp"
 #include "UI/Views/CreateTaskView.hpp"
+#include "UI/Views/ProjectModal.hpp"
 #include "UI/Views/ReviewView.hpp"
 #include "UI/Views/TaskBoardView.hpp"
 
@@ -121,15 +122,21 @@ TEST(UiComponentsTest, TaskDetailsPaneRendersSelectedTask) {
     state.tasks = {task};
     state.selectedTaskId = 42;
 
-    bool statusChanged = false;
+    bool taskPassed = false;
+    bool archiveToggled = false;
     bool workerAssigned = false;
     bool taskDeleted = false;
 
     Components::TaskDetailsCallbacks callbacks{
-        .onChangeStatus =
+        .onPassTask =
             [&](std::int64_t id) {
                 EXPECT_EQ(id, 42);
-                statusChanged = true;
+                taskPassed = true;
+            },
+        .onToggleArchive =
+            [&](std::int64_t id) {
+                EXPECT_EQ(id, 42);
+                archiveToggled = true;
             },
         .onAssignWorker =
             [&](std::int64_t id) {
@@ -156,7 +163,17 @@ TEST(UiComponentsTest, TaskDetailsPaneRendersSelectedTask) {
     EXPECT_NE(rendered.find("Bob"), std::string::npos);
     EXPECT_NE(rendered.find("Charlie"), std::string::npos);
     EXPECT_NE(rendered.find("Add composite index"), std::string::npos);
-    EXPECT_NE(rendered.find("Change Status"), std::string::npos);
+    EXPECT_NE(rendered.find("Pass"), std::string::npos);
+    EXPECT_NE(rendered.find("Toggle Archive"), std::string::npos);
+
+    EXPECT_TRUE(comp->OnEvent(Event::Return));
+    EXPECT_TRUE(taskPassed);
+
+    EXPECT_TRUE(comp->OnEvent(Event::ArrowRight));
+    EXPECT_TRUE(comp->OnEvent(Event::Return));
+    EXPECT_TRUE(archiveToggled);
+    EXPECT_FALSE(workerAssigned);
+    EXPECT_FALSE(taskDeleted);
 }
 
 TEST(UiComponentsTest, TaskDetailsPaneEmptyState) {
@@ -495,6 +512,105 @@ TEST(UiComponentsTest, TaskBoardViewSearchQueryInputAndBackspaceRestoresTasks) {
 
     EXPECT_TRUE(comp->OnEvent(Event::Character('k')));
     EXPECT_EQ(state.selectedTaskId, 1);
+}
+
+TEST(UiComponentsTest, ProjectModalRendersProjectsAndHandlesSelectAddDelete) {
+    AppState state;
+    std::vector<Views::ProjectEntryView> projects = {
+        {.server = "alpha:8081", .userId = 1, .userName = "alice"},
+        {.server = "beta:50051", .userId = 2, .userName = "bob"},
+    };
+    std::string selectedServer;
+    bool addClicked = false;
+    std::string deletedServer;
+    bool deletedForceLocal = false;
+    std::string errorMsg;
+
+    Views::ProjectModalCallbacks callbacks{
+        .getProjects = [&] { return projects; },
+        .onSelectProject = [&](const std::string& s) { selectedServer = s; },
+        .onAddProject = [&] { addClicked = true; },
+        .onDeleteProject =
+            [&](const std::string& s, bool forceLocal) {
+                deletedServer = s;
+                deletedForceLocal = forceLocal;
+            },
+        .getErrorMessage = [&] { return errorMsg; },
+        .isBusy = [] { return false; },
+        .onClearError = [&] { errorMsg.clear(); },
+    };
+
+    auto comp = Views::CreateProjectModal(state, callbacks);
+    auto screen = Screen::Create(Dimension::Fixed(80), Dimension::Fixed(22));
+    Render(screen, comp->Render());
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("SELECT PROJECT"), std::string::npos);
+    EXPECT_NE(rendered.find("alpha:8081"), std::string::npos);
+    EXPECT_NE(rendered.find("alice"), std::string::npos);
+    EXPECT_NE(rendered.find("beta:50051"), std::string::npos);
+    EXPECT_NE(rendered.find("Connect"), std::string::npos);
+    EXPECT_NE(rendered.find("Add Project"), std::string::npos);
+    EXPECT_NE(rendered.find("Delete Project"), std::string::npos);
+
+    // Move down with 'j' to beta:50051 and press Return to connect
+    EXPECT_TRUE(comp->OnEvent(Event::Character('j')));
+    EXPECT_TRUE(comp->OnEvent(Event::Return));
+    EXPECT_EQ(selectedServer, "beta:50051");
+
+    // Press 'a' to add project
+    EXPECT_TRUE(comp->OnEvent(Event::Character('a')));
+    EXPECT_TRUE(addClicked);
+
+    // Press 'd' to open delete confirmation for beta:50051
+    EXPECT_TRUE(comp->OnEvent(Event::Character('d')));
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("DELETE PROJECT"), std::string::npos);
+    EXPECT_NE(rendered.find("beta:50051"), std::string::npos);
+    EXPECT_NE(rendered.find("bob"), std::string::npos);
+    EXPECT_NE(rendered.find("will be deleted from the server"),
+              std::string::npos);
+
+    // Confirm delete (focused on Confirm Delete button)
+    EXPECT_TRUE(comp->OnEvent(Event::Return));
+    EXPECT_EQ(deletedServer, "beta:50051");
+    EXPECT_FALSE(deletedForceLocal);
+
+    // Simulate server failure: Remove Locally button appears
+    errorMsg = "Server unavailable";
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("Server unavailable"), std::string::npos);
+    EXPECT_NE(rendered.find("Remove Locally"), std::string::npos);
+
+    // Escape cancels delete confirmation back to project list
+    EXPECT_TRUE(comp->OnEvent(Event::Escape));
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("SELECT PROJECT"), std::string::npos);
+    EXPECT_TRUE(errorMsg.empty());
+}
+
+TEST(UiComponentsTest, ProjectModalRendersEmptyState) {
+    AppState state;
+    Views::ProjectModalCallbacks callbacks;
+    callbacks.getProjects = [] {
+        return std::vector<Views::ProjectEntryView>{};
+    };
+
+    auto comp = Views::CreateProjectModal(state, callbacks);
+    auto screen = Screen::Create(Dimension::Fixed(80), Dimension::Fixed(20));
+    Render(screen, comp->Render());
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("No saved projects in config"), std::string::npos);
+    EXPECT_NE(rendered.find("Add Project"), std::string::npos);
+    // Escape on empty list is consumed without closing modal
+    EXPECT_TRUE(comp->OnEvent(Event::Escape));
 }
 
 } // namespace Aquarium::UI::Tests

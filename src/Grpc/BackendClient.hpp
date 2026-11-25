@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <grpcpp/grpcpp.h>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <TaskStoreService.grpc.pb.h>
@@ -32,14 +33,21 @@ AppError MapGrpcStatus(const grpc::Status& status);
 class BackendClient {
 private:
     void InitStubs(std::shared_ptr<grpc::ChannelInterface> channel);
+    [[nodiscard]] std::shared_ptr<aquarium::api::UtilsService::Stub>
+    GetUtilsStub() const;
+    [[nodiscard]] std::shared_ptr<aquarium::api::UserStoreService::Stub>
+    GetUserStub() const;
+    [[nodiscard]] std::shared_ptr<aquarium::api::TaskStoreService::Stub>
+    GetTaskStub() const;
 
+    mutable std::mutex _mutex;
     std::string _targetServer;
     std::string _authToken;
     std::shared_ptr<grpc::ChannelInterface> _channel;
 
-    std::unique_ptr<aquarium::api::UtilsService::Stub> _utilsStub;
-    std::unique_ptr<aquarium::api::UserStoreService::Stub> _userStub;
-    std::unique_ptr<aquarium::api::TaskStoreService::Stub> _taskStub;
+    std::shared_ptr<aquarium::api::UtilsService::Stub> _utilsStub;
+    std::shared_ptr<aquarium::api::UserStoreService::Stub> _userStub;
+    std::shared_ptr<aquarium::api::TaskStoreService::Stub> _taskStub;
 
 public:
     explicit BackendClient(const std::string& targetServer,
@@ -51,9 +59,9 @@ public:
     virtual ~BackendClient() = default;
 
     void SetAuthToken(std::string token);
-    [[nodiscard]] const std::string& GetAuthToken() const noexcept;
+    [[nodiscard]] std::string GetAuthToken() const;
     void SetTargetServer(const std::string& targetServer);
-    [[nodiscard]] const std::string& GetTargetServer() const noexcept;
+    [[nodiscard]] std::string GetTargetServer() const;
 
     [[nodiscard]] std::unique_ptr<grpc::ClientContext> CreateContext(
         std::chrono::milliseconds timeout = std::chrono::milliseconds(5000),

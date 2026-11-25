@@ -39,7 +39,7 @@ endif()
 find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 
-set(PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Aquarium-server/proto")
+set(PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/proto")
 set(PROTO_FILES
     "${PROTO_DIR}/TaskStoreService.proto" "${PROTO_DIR}/UserStoreService.proto"
     "${PROTO_DIR}/UtilsService.proto")
@@ -108,6 +108,7 @@ add_library(
   src/UI/Views/ReviewView.cpp
   src/UI/Views/CreateTaskView.cpp
   src/UI/Views/AuthModal.cpp
+  src/UI/Views/ProjectModal.cpp
   src/UI/MainScreen.cpp)
 
 target_include_directories(aquarium-client-core

@@ -1,5 +1,6 @@
 #include "ConfigManager.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <string_view>
@@ -76,17 +77,18 @@ std::filesystem::path ConfigManager::GetDefaultConfigPath() {
     return std::filesystem::current_path() / "config.json";
 }
 
-CliOverrides ConfigManager::ParseCommandLine(int argc, char* argv[]) {
+CliOverrides
+ConfigManager::ParseCommandLine(std::span<const std::string_view> args) {
     CliOverrides overrides;
-    for (int i = 1; i < argc; ++i) {
-        std::string_view arg(argv[i]);
+    for (std::size_t i = 1; i < args.size(); ++i) {
+        std::string_view arg = args[i];
         if (arg == "--server" || arg == "-s") {
-            if (i + 1 < argc) {
-                overrides.server = argv[++i];
+            if (i + 1 < args.size()) {
+                overrides.server = std::string(args[++i]);
             }
         } else if (arg == "--token" || arg == "-t") {
-            if (i + 1 < argc) {
-                overrides.token = argv[++i];
+            if (i + 1 < args.size()) {
+                overrides.token = std::string(args[++i]);
             }
         } else if (arg == "--smoke-test") {
             overrides.smokeTest = true;
@@ -95,6 +97,16 @@ CliOverrides ConfigManager::ParseCommandLine(int argc, char* argv[]) {
         }
     }
     return overrides;
+}
+
+CliOverrides
+ConfigManager::ParseCommandLine(int argc,
+                                std::span<const std::string_view> argv) {
+    if (argc <= 0) {
+        return {};
+    }
+    const auto count = std::min(static_cast<std::size_t>(argc), argv.size());
+    return ParseCommandLine(argv.first(count));
 }
 
 void ConfigManager::ApplyOverrides(const CliOverrides& overrides) {
@@ -240,6 +252,62 @@ bool ConfigManager::UpdateActiveSession(std::int64_t userId,
         .userName = std::move(userName),
         .authToken = std::move(token),
     };
+    return Save();
+}
+
+std::vector<SavedProject> ConfigManager::GetSavedProjects() const {
+    std::vector<SavedProject> projects;
+    projects.reserve(_config.servers.size());
+    for (const auto& [server, entry] : _config.servers) {
+        projects.push_back(SavedProject{
+            .server = server,
+            .entry = entry,
+        });
+    }
+    std::ranges::sort(projects,
+                      [](const SavedProject& lhs, const SavedProject& rhs) {
+                          return lhs.server < rhs.server;
+                      });
+    return projects;
+}
+
+bool ConfigManager::SaveProjectSession(const std::string& server,
+                                       std::int64_t userId,
+                                       std::string userName,
+                                       std::string token) {
+    _overrides.server.reset();
+    _overrides.token.reset();
+    _config.activeServer = server;
+    _config.servers[server] = ServerEntry{
+        .userId = userId,
+        .userName = std::move(userName),
+        .authToken = std::move(token),
+    };
+    return Save();
+}
+
+bool ConfigManager::SwitchActiveProject(const std::string& server) {
+    if (!_config.servers.contains(server)) {
+        return false;
+    }
+    _overrides.server.reset();
+    _overrides.token.reset();
+    _config.activeServer = server;
+    return Save();
+}
+
+bool ConfigManager::RemoveProject(const std::string& server) {
+    auto erased = _config.servers.erase(server);
+    if (erased == 0) {
+        return false;
+    }
+    if (_overrides.server.has_value() && *_overrides.server == server) {
+        _overrides.server.reset();
+        _overrides.token.reset();
+    }
+    if (_config.activeServer == server) {
+        _config.activeServer.clear();
+    }
     return Save();
 }
 

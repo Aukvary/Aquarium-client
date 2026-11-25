@@ -1,4 +1,4 @@
-#include "BackendClient.hpp"
+#include "./BackendClient.hpp"
 
 #include <utility>
 
@@ -68,42 +68,74 @@ BackendClient::BackendClient(std::shared_ptr<grpc::ChannelInterface> channel,
 }
 
 void BackendClient::InitStubs(std::shared_ptr<grpc::ChannelInterface> channel) {
+    std::scoped_lock lock(_mutex);
     _channel = std::move(channel);
     _utilsStub = aquarium::api::UtilsService::NewStub(_channel);
     _userStub = aquarium::api::UserStoreService::NewStub(_channel);
     _taskStub = aquarium::api::TaskStoreService::NewStub(_channel);
 }
 
+std::shared_ptr<aquarium::api::UtilsService::Stub>
+BackendClient::GetUtilsStub() const {
+    std::scoped_lock lock(_mutex);
+    return _utilsStub;
+}
+
+std::shared_ptr<aquarium::api::UserStoreService::Stub>
+BackendClient::GetUserStub() const {
+    std::scoped_lock lock(_mutex);
+    return _userStub;
+}
+
+std::shared_ptr<aquarium::api::TaskStoreService::Stub>
+BackendClient::GetTaskStub() const {
+    std::scoped_lock lock(_mutex);
+    return _taskStub;
+}
+
 void BackendClient::SetAuthToken(std::string token) {
+    std::scoped_lock lock(_mutex);
     _authToken = std::move(token);
 }
 
-const std::string& BackendClient::GetAuthToken() const noexcept {
+std::string BackendClient::GetAuthToken() const {
+    std::scoped_lock lock(_mutex);
     return _authToken;
 }
 
 void BackendClient::SetTargetServer(const std::string& targetServer) {
-    _targetServer = targetServer;
     auto channel =
-        grpc::CreateChannel(_targetServer, grpc::InsecureChannelCredentials());
-    InitStubs(channel);
+        grpc::CreateChannel(targetServer, grpc::InsecureChannelCredentials());
+    std::scoped_lock lock(_mutex);
+    _targetServer = targetServer;
+    _channel = std::move(channel);
+    _utilsStub = aquarium::api::UtilsService::NewStub(_channel);
+    _userStub = aquarium::api::UserStoreService::NewStub(_channel);
+    _taskStub = aquarium::api::TaskStoreService::NewStub(_channel);
 }
 
-const std::string& BackendClient::GetTargetServer() const noexcept {
+std::string BackendClient::GetTargetServer() const {
+    std::scoped_lock lock(_mutex);
     return _targetServer;
 }
 
 std::unique_ptr<grpc::ClientContext>
 BackendClient::CreateContext(std::chrono::milliseconds timeout,
                              const std::string& customInviteKey) const {
+    std::string token;
+    {
+        std::scoped_lock lock(_mutex);
+        token = _authToken;
+    }
+
     auto context = std::make_unique<grpc::ClientContext>();
     if (timeout > std::chrono::milliseconds::zero()) {
         auto deadline = std::chrono::system_clock::now() + timeout;
         context->set_deadline(deadline);
     }
 
-    if (!_authToken.empty()) {
-        context->AddMetadata("authorization", "Bearer " + _authToken);
+    if (!token.empty()) {
+        context->AddMetadata("authorization", "Bearer " + token);
     }
     if (!customInviteKey.empty()) {
         context->AddMetadata("invite-key", "Invite " + customInviteKey);
@@ -123,7 +155,8 @@ BackendClient::Health(std::chrono::milliseconds timeout) {
     aquarium::api::HealthRequest request;
     aquarium::api::HealthResponse response;
 
-    grpc::Status status = _utilsStub->Health(context.get(), request, &response);
+    grpc::Status status =
+        GetUtilsStub()->Health(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -135,7 +168,8 @@ Result<std::vector<aquarium::api::User>> BackendClient::GetAllUsers() {
     aquarium::api::GetAllUsersRequest request;
     aquarium::api::GetAllUsersResponse response;
 
-    grpc::Status status = _userStub->GetAll(context.get(), request, &response);
+    grpc::Status status =
+        GetUserStub()->GetAll(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -154,7 +188,8 @@ Result<aquarium::api::User> BackendClient::GetUser(std::int64_t userId) {
     request.set_id(userId);
     aquarium::api::GetUserResponse response;
 
-    grpc::Status status = _userStub->GetUser(context.get(), request, &response);
+    grpc::Status status =
+        GetUserStub()->GetUser(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -169,7 +204,8 @@ BackendClient::AddUser(const std::string& name, const std::string& inviteKey) {
     request.set_invite_key(inviteKey);
     aquarium::api::AddUserResponse response;
 
-    grpc::Status status = _userStub->AddUser(context.get(), request, &response);
+    grpc::Status status =
+        GetUserStub()->AddUser(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -185,7 +221,7 @@ BackendClient::UpdateUser(std::int64_t userId, const std::string& newName) {
     aquarium::api::UpdateUserResponse response;
 
     grpc::Status status =
-        _userStub->UpdateUser(context.get(), request, &response);
+        GetUserStub()->UpdateUser(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -199,7 +235,7 @@ Result<bool> BackendClient::DeleteUser(std::int64_t userId) {
     aquarium::api::DeleteUserResponse response;
 
     grpc::Status status =
-        _userStub->DeleteUser(context.get(), request, &response);
+        GetUserStub()->DeleteUser(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -224,7 +260,7 @@ BackendClient::GetTasks(const GetTasksFilter& filter) {
 
     aquarium::api::GetTasksResponse response;
     grpc::Status status =
-        _taskStub->GetTasks(context.get(), request, &response);
+        GetTaskStub()->GetTasks(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -237,7 +273,8 @@ Result<aquarium::api::Task> BackendClient::GetTask(std::int64_t taskId) {
     request.set_id(taskId);
     aquarium::api::GetTaskResponse response;
 
-    grpc::Status status = _taskStub->GetTask(context.get(), request, &response);
+    grpc::Status status =
+        GetTaskStub()->GetTask(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -250,7 +287,7 @@ BackendClient::CreateTask(const aquarium::api::CreateTaskRequest& request) {
     aquarium::api::CreateTaskResponse response;
 
     grpc::Status status =
-        _taskStub->CreateTask(context.get(), request, &response);
+        GetTaskStub()->CreateTask(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -263,7 +300,7 @@ BackendClient::UpdateTask(const aquarium::api::UpdateTaskRequest& request) {
     aquarium::api::UpdateTaskResponse response;
 
     grpc::Status status =
-        _taskStub->UpdateTask(context.get(), request, &response);
+        GetTaskStub()->UpdateTask(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -280,7 +317,7 @@ BackendClient::UpdateTaskStatus(std::int64_t taskId,
     aquarium::api::UpdateTaskStatusResponse response;
 
     grpc::Status status =
-        _taskStub->UpdateTaskStatus(context.get(), request, &response);
+        GetTaskStub()->UpdateTaskStatus(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -296,7 +333,7 @@ Result<aquarium::api::Task> BackendClient::AssignWorker(std::int64_t taskId,
     aquarium::api::AssignWorkerResponse response;
 
     grpc::Status status =
-        _taskStub->AssignWorker(context.get(), request, &response);
+        GetTaskStub()->AssignWorker(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -312,7 +349,7 @@ Result<aquarium::api::Task> BackendClient::RemoveWorker(std::int64_t taskId,
     aquarium::api::RemoveWorkerResponse response;
 
     grpc::Status status =
-        _taskStub->RemoveWorker(context.get(), request, &response);
+        GetTaskStub()->RemoveWorker(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -326,7 +363,7 @@ Result<bool> BackendClient::DeleteTask(std::int64_t taskId) {
     aquarium::api::DeleteTaskResponse response;
 
     grpc::Status status =
-        _taskStub->DeleteTask(context.get(), request, &response);
+        GetTaskStub()->DeleteTask(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -341,7 +378,7 @@ BackendClient::GetComments(std::int64_t taskId) {
     aquarium::api::GetCommentsResponse response;
 
     grpc::Status status =
-        _taskStub->GetComments(context.get(), request, &response);
+        GetTaskStub()->GetComments(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -370,7 +407,7 @@ BackendClient::AddComment(std::int64_t taskId,
     aquarium::api::AddCommentResponse response;
 
     grpc::Status status =
-        _taskStub->AddComment(context.get(), request, &response);
+        GetTaskStub()->AddComment(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -386,7 +423,7 @@ BackendClient::RejectTask(std::int64_t taskId, const std::string& reason) {
     aquarium::api::RejectTaskResponse response;
 
     grpc::Status status =
-        _taskStub->RejectTask(context.get(), request, &response);
+        GetTaskStub()->RejectTask(context.get(), request, &response);
     if (!status.ok()) {
         return MapGrpcStatus(status);
     }
@@ -396,7 +433,7 @@ BackendClient::RejectTask(std::int64_t taskId, const std::string& reason) {
 std::unique_ptr<grpc::ClientReader<aquarium::api::TaskEvent>>
 BackendClient::SubscribeEvents(grpc::ClientContext* context) {
     aquarium::api::SubscribeEventsRequest request;
-    return _taskStub->SubscribeEvents(context, request);
+    return GetTaskStub()->SubscribeEvents(context, request);
 }
 
 } // namespace Aquarium::Grpc

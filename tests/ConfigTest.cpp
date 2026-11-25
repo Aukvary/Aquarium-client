@@ -159,4 +159,47 @@ TEST_F(ConfigTest, EnvironmentVariableOverrides) {
     EXPECT_EQ(manager.GetActiveToken(), "env_tok_777");
 }
 
+TEST_F(ConfigTest, ProjectListSwitchSaveAndRemove) {
+    ConfigManager manager(_testConfigPath);
+    ASSERT_TRUE(manager.Load());
+
+    CliOverrides cli;
+    cli.server = "override:50051";
+    cli.token = "override_tok";
+    manager.ApplyOverrides(cli);
+
+    EXPECT_TRUE(
+        manager.SaveProjectSession("zeta:50051", 2, "alice", "tok_alice"));
+    EXPECT_TRUE(manager.SaveProjectSession("alpha:8081", 5, "bob", "tok_bob"));
+
+    EXPECT_EQ(manager.GetActiveServer(), "alpha:8081");
+    EXPECT_EQ(manager.GetActiveToken(), "tok_bob");
+
+    auto projects = manager.GetSavedProjects();
+    ASSERT_EQ(projects.size(), 2);
+    EXPECT_EQ(projects[0].server, "alpha:8081");
+    EXPECT_EQ(projects[0].entry.userName, "bob");
+    EXPECT_EQ(projects[1].server, "zeta:50051");
+    EXPECT_EQ(projects[1].entry.userName, "alice");
+
+    EXPECT_FALSE(manager.SwitchActiveProject("missing:9999"));
+    EXPECT_TRUE(manager.SwitchActiveProject("zeta:50051"));
+    EXPECT_EQ(manager.GetActiveServer(), "zeta:50051");
+    EXPECT_EQ(manager.GetActiveToken(), "tok_alice");
+
+    EXPECT_FALSE(manager.RemoveProject("missing:9999"));
+    EXPECT_TRUE(manager.RemoveProject("zeta:50051"));
+    EXPECT_EQ(manager.GetActiveServer(), "");
+    EXPECT_EQ(manager.GetActiveToken(), "");
+
+    projects = manager.GetSavedProjects();
+    ASSERT_EQ(projects.size(), 1);
+    EXPECT_EQ(projects[0].server, "alpha:8081");
+
+    ConfigManager reloaded(_testConfigPath);
+    ASSERT_TRUE(reloaded.Load());
+    EXPECT_EQ(reloaded.GetSavedProjects().size(), 1);
+    EXPECT_EQ(reloaded.GetActiveServer(), "");
+}
+
 } // namespace Aquarium::Config::Tests

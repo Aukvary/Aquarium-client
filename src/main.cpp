@@ -4,14 +4,22 @@
 
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
+#include <vector>
 
 int main(int argc, char* argv[]) {
     using Aquarium::Config::ConfigManager;
     using Aquarium::Grpc::BackendClient;
     using Aquarium::UI::MainScreen;
 
-    auto overrides = ConfigManager::ParseCommandLine(argc, argv);
+    std::vector<std::string_view> args;
+    if (argc > 0 && argv != nullptr) {
+        const std::span<char*> rawArgs(argv, static_cast<std::size_t>(argc));
+        args.assign(rawArgs.begin(), rawArgs.end());
+    }
+    auto overrides = ConfigManager::ParseCommandLine(args);
     if (overrides.showHelp) {
         std::cout << "Usage: aquarium-client [options]\n"
                   << "Options:\n"

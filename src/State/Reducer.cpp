@@ -161,6 +161,20 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
                 state.session.userId = a.userId;
                 state.session.userName = a.userName;
                 state.session.authToken = a.token;
+            } else if constexpr (std::is_same_v<T, ExitProjectAction>) {
+                state.session = SessionState{};
+                state.session.serverHost.clear();
+                state.tasks.clear();
+                state.selectedTaskId = std::nullopt;
+                state.activeComments.clear();
+                state.users.clear();
+                state.filter = FilterState{};
+                state.isLoadingTasks = false;
+                state.isLoadingComments = false;
+                state.isLoadingUsers = false;
+                state.connectionStatus = ConnectionStatus::Offline;
+                state.currentView = ViewType::Tasks;
+                state.activeModal = ModalType::ProjectModal;
             } else if constexpr (std::is_same_v<T, SetLoadingTasksAction>) {
                 state.isLoadingTasks = a.loading;
             } else if constexpr (std::is_same_v<T, TasksLoadedAction>) {
@@ -237,10 +251,9 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
                     }
                 }
             } else if constexpr (std::is_same_v<T, TaskDeletedAction>) {
-                auto it = std::remove_if(state.tasks, [&a](const auto& t) {
+                std::erase_if(state.tasks, [&a](const auto& t) {
                     return t.id() == a.taskId;
                 });
-                state.tasks.erase(it, state.tasks.end());
 
                 if (state.selectedTaskId.has_value() &&
                     *state.selectedTaskId == a.taskId) {

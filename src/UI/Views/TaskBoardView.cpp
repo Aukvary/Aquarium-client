@@ -32,24 +32,6 @@ const std::vector<std::pair<std::string, std::optional<TaskStatus>>> kFilters =
         {"ARCHIVE", TaskStatus::ARCHIVE},
 };
 
-TaskStatus GetNextStatus(TaskStatus current) {
-    switch (current) {
-    case TaskStatus::PLAN:
-        return TaskStatus::ACTIVE;
-    case TaskStatus::ACTIVE:
-        return TaskStatus::IN_REVIEW;
-    case TaskStatus::IN_REVIEW:
-        return TaskStatus::COMPLETE;
-    case TaskStatus::COMPLETE:
-        return TaskStatus::VERIFIED;
-    case TaskStatus::VERIFIED:
-        return TaskStatus::ARCHIVE;
-    case TaskStatus::ARCHIVE:
-    default:
-        return TaskStatus::PLAN;
-    }
-}
-
 class SearchInputWrapper : public ComponentBase {
 public:
     SearchInputWrapper(Component child,
@@ -142,31 +124,43 @@ CreateTaskBoardView(const State::AppState& state,
         Make<SearchInputWrapper>(rawSearchField, searchQuery, state, dispatch);
 
     // Center Details Pane Callbacks
+    auto updateTaskStatus = [dispatch, client](std::int64_t taskId,
+                                               TaskStatus targetStatus) {
+        if (!client) {
+            return;
+        }
+        auto res = client->UpdateTaskStatus(taskId, targetStatus);
+        if (res.HasValue()) {
+            const auto updatedStatus = res.Value().status();
+            dispatch(State::TaskUpdatedAction{res.Value()});
+            dispatch(State::ShowToastAction{
+                .message = "Task #" + std::to_string(taskId) + " moved to " +
+                           GetStatusBadge(updatedStatus).text,
+                .severity = State::ToastSeverity::Success,
+            });
+        } else {
+            dispatch(State::ShowToastAction{
+                .message = res.Error().message,
+                .severity = State::ToastSeverity::Error,
+            });
+        }
+    };
+
     Components::TaskDetailsCallbacks detailsCallbacks{
-        .onChangeStatus =
-            [&state, dispatch, client](std::int64_t taskId) {
+        .onPassTask =
+            [updateTaskStatus](std::int64_t taskId) {
+                updateTaskStatus(taskId, TaskStatus::COMPLETE);
+            },
+        .onToggleArchive =
+            [&state, updateTaskStatus](std::int64_t taskId) {
                 auto task = state.GetSelectedTask();
-                if (task == nullptr || !client) {
+                if (task == nullptr) {
                     return;
                 }
-                auto next = GetNextStatus(task->status());
-                auto res = client->UpdateTaskStatus(taskId, next);
-                if (res.HasValue()) {
-                    dispatch(State::TaskStatusChangedAction{
-                        .taskId = taskId,
-                        .newStatus = next,
-                    });
-                    dispatch(State::ShowToastAction{
-                        .message = "Task #" + std::to_string(taskId) +
-                                   " moved to " + GetStatusBadge(next).text,
-                        .severity = State::ToastSeverity::Success,
-                    });
-                } else {
-                    dispatch(State::ShowToastAction{
-                        .message = res.Error().message,
-                        .severity = State::ToastSeverity::Error,
-                    });
-                }
+                const auto targetStatus = task->status() == TaskStatus::ARCHIVE
+                                              ? TaskStatus::ACTIVE
+                                              : TaskStatus::ARCHIVE;
+                updateTaskStatus(taskId, targetStatus);
             },
         .onAssignWorker =
             [&state, dispatch, client](std::int64_t taskId) {

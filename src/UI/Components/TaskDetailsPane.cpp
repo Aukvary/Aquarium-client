@@ -15,10 +15,17 @@ using namespace ftxui;
 
 Component CreateTaskDetailsPane(const State::AppState& state,
                                 TaskDetailsCallbacks callbacks) {
-    auto btnStatus = Button("Change Status", [&state, callbacks] {
+    auto btnPass = Button("Pass", [&state, callbacks] {
         auto task = state.GetSelectedTask();
-        if (task != nullptr && callbacks.onChangeStatus) {
-            callbacks.onChangeStatus(task->id());
+        if (task != nullptr && callbacks.onPassTask) {
+            callbacks.onPassTask(task->id());
+        }
+    });
+
+    auto btnToggleArchive = Button("Toggle Archive", [&state, callbacks] {
+        auto task = state.GetSelectedTask();
+        if (task != nullptr && callbacks.onToggleArchive) {
+            callbacks.onToggleArchive(task->id());
         }
     });
 
@@ -37,7 +44,8 @@ Component CreateTaskDetailsPane(const State::AppState& state,
     });
 
     auto buttonContainer = Container::Horizontal({
-        btnStatus,
+        btnPass,
+        btnToggleArchive,
         btnAssign,
         btnDelete,
     });

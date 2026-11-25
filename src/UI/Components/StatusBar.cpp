@@ -61,8 +61,9 @@ Component CreateStatusBar(const State::AppState& state) {
     return Renderer([&state] {
         auto connBadge = RenderConnectionBadge(state.connectionStatus);
         auto toastElement = RenderToast(state.activeToast);
-        auto cheatsheet =
-            text("[1:Tasks 2:Review 3:Create] [/:Search] [q:Quit]") | dim;
+        auto cheatsheet = text("[1:Tasks 2:Review 3:Create] [/:Search] "
+                               "[Ctrl+P:Projects] [q:Quit]") |
+                          dim;
 
         return hbox({
             text(" "),
