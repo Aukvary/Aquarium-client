@@ -62,6 +62,7 @@ struct SessionState {
 struct FilterState {
     std::optional<aquarium::api::TaskStatus> statusFilter{std::nullopt};
     std::string searchQuery;
+    bool onlyMyTasks{false};
 };
 
 struct AppState {
@@ -83,6 +84,10 @@ struct AppState {
 
     [[nodiscard]] const aquarium::api::Task* GetSelectedTask() const;
     [[nodiscard]] const aquarium::api::User* FindUser(std::int64_t id) const;
+    [[nodiscard]] bool
+    IsTaskAssignedAsWorker(const aquarium::api::Task& task) const;
+    [[nodiscard]] bool
+    IsTaskAssignedAsChecker(const aquarium::api::Task& task) const;
     [[nodiscard]] std::vector<const aquarium::api::Task*>
     GetFilteredTasks() const;
 };

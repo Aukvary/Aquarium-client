@@ -20,6 +20,28 @@ using namespace ftxui;
 using aquarium::api::Task;
 using aquarium::api::TaskStatus;
 
+namespace {
+
+std::vector<const Task*> GetReviewTasks(const State::AppState& state) {
+    std::vector<const Task*> result;
+    std::unordered_set<std::int64_t> seenIds;
+    for (const auto& task : state.tasks) {
+        if (task.status() != TaskStatus::IN_REVIEW) {
+            continue;
+        }
+        if (state.filter.onlyMyTasks &&
+            !state.IsTaskAssignedAsChecker(task)) {
+            continue;
+        }
+        if (seenIds.insert(task.id()).second) {
+            result.push_back(&task);
+        }
+    }
+    return result;
+}
+
+} // namespace
+
 Component CreateReviewView(const State::AppState& state,
                            std::function<void(const State::Action&)> dispatch,
                            std::shared_ptr<Grpc::BackendClient> client) {
@@ -198,16 +220,10 @@ Component CreateReviewView(const State::AppState& state,
         });
 
     // Left Column: Review Task List
-    auto dummyLeft = Container::Vertical({});
-    auto leftRenderer = Renderer(dummyLeft, [&state] {
-        std::vector<const Task*> currentReviewTasks;
-        std::unordered_set<std::int64_t> seenIds;
-        for (const auto& task : state.tasks) {
-            if (task.status() == TaskStatus::IN_REVIEW &&
-                seenIds.insert(task.id()).second) {
-                currentReviewTasks.push_back(&task);
-            }
-        }
+    auto btnScopeToggle = CreateTaskScopeToggleButton(state, dispatch);
+    auto leftContainer = Container::Vertical({btnScopeToggle});
+    auto leftRenderer = Renderer(leftContainer, [&state, btnScopeToggle] {
+        auto currentReviewTasks = GetReviewTasks(state);
         Elements taskRows;
         if (currentReviewTasks.empty()) {
             taskRows.push_back(text("No tasks awaiting review.") | dim |
@@ -243,6 +259,7 @@ Component CreateReviewView(const State::AppState& state,
                    text("IN REVIEW (" +
                         std::to_string(currentReviewTasks.size()) + ")") |
                        bold | color(Color::YellowLight) | center,
+                   btnScopeToggle->Render() | center,
                    separator(),
                    taskListArea,
                }) |
@@ -266,7 +283,7 @@ Component CreateReviewView(const State::AppState& state,
             });
         });
 
-    return CatchEvent(fullLayout, [&state, rightRenderer,
+    return CatchEvent(fullLayout, [&state, dispatch, rightRenderer,
                                    selectTaskAndFetchComments](Event event) {
         // If typing in revision reason or remarks pane, do not intercept
         // hotkeys
@@ -274,14 +291,13 @@ Component CreateReviewView(const State::AppState& state,
             return false;
         }
 
-        std::vector<const Task*> currentReviewTasks;
-        std::unordered_set<std::int64_t> seenIds;
-        for (const auto& task : state.tasks) {
-            if (task.status() == TaskStatus::IN_REVIEW &&
-                seenIds.insert(task.id()).second) {
-                currentReviewTasks.push_back(&task);
-            }
+        // Hotkey 'm': toggle between my review tasks (checker) and all tasks
+        if (event == Event::Character('m')) {
+            dispatch(State::ToggleOnlyMyTasksAction{});
+            return true;
         }
+
+        auto currentReviewTasks = GetReviewTasks(state);
         // Navigation: 'j' or Down key: select next review task
         if (event == Event::Character('j') || event == Event::ArrowDown) {
             if (!currentReviewTasks.empty()) {

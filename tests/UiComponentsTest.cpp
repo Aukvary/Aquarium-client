@@ -228,6 +228,80 @@ TEST(UiComponentsTest, RemarksPaneRendersCategorizedFeed) {
     EXPECT_NE(rendered.find("[REVISION REASON]"), std::string::npos);
     EXPECT_NE(rendered.find("Fix compilation errors!"), std::string::npos);
     EXPECT_NE(rendered.find("Send"), std::string::npos);
+
+    // Newer remark (c2) must be rendered above older remark (c1).
+    auto posNewer = rendered.find("Fix compilation errors!");
+    auto posOlder = rendered.find("General comment text");
+    ASSERT_NE(posNewer, std::string::npos);
+    ASSERT_NE(posOlder, std::string::npos);
+    EXPECT_LT(posNewer, posOlder);
+}
+
+TEST(UiComponentsTest, RemarksPaneSupportsScrollingAndResetsOnNewRemark) {
+    AppState state;
+    state.selectedTaskId = 10;
+
+    for (int i = 1; i <= 10; ++i) {
+        Comment c;
+        c.set_id(i);
+        c.set_taskid(10);
+        c.set_content("Remark item #" + std::to_string(i));
+        c.set_type(CommentType::COMMENT_GENERAL);
+        state.activeComments.push_back(c);
+    }
+
+    auto comp = Components::CreateRemarksPane(state);
+    auto screen = Screen::Create(Dimension::Fixed(60), Dimension::Fixed(16));
+    Render(screen, comp->Render());
+    std::string rendered = screen.ToString();
+
+    // Newest remark (#10) is visible at the top; oldest (#1) is off-screen.
+    EXPECT_NE(rendered.find("Remark item #10"), std::string::npos);
+    EXPECT_EQ(rendered.find("Remark item #1 "), std::string::npos);
+
+    // Scroll down with keyboard while feed is focused.
+    for (int i = 0; i < 40; ++i) {
+        EXPECT_TRUE(comp->OnEvent(Event::ArrowDown));
+    }
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+
+    EXPECT_EQ(rendered.find("Remark item #10"), std::string::npos);
+    EXPECT_NE(rendered.find("Remark item #1"), std::string::npos);
+
+    // Scroll back up with mouse wheel inside the feed area.
+    Mouse wheelUp;
+    wheelUp.button = Mouse::WheelUp;
+    wheelUp.x = 10;
+    wheelUp.y = 6;
+    for (int i = 0; i < 15; ++i) {
+        EXPECT_TRUE(comp->OnEvent(Event::Mouse("", wheelUp)));
+    }
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("Remark item #10"), std::string::npos);
+
+    // Scroll down to bottom with End, then add a new remark -> resets to top.
+    EXPECT_TRUE(comp->OnEvent(Event::End));
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_EQ(rendered.find("Remark item #10"), std::string::npos);
+
+    Comment newest;
+    newest.set_id(11);
+    newest.set_taskid(10);
+    newest.set_content("Brand new remark #11");
+    newest.set_type(CommentType::COMMENT_GENERAL);
+    state.activeComments.push_back(newest);
+
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("Brand new remark #11"), std::string::npos);
 }
 
 TEST(UiComponentsTest, TaskBoardViewRendersThreeColumns) {
@@ -611,6 +685,121 @@ TEST(UiComponentsTest, ProjectModalRendersEmptyState) {
     EXPECT_NE(rendered.find("Add Project"), std::string::npos);
     // Escape on empty list is consumed without closing modal
     EXPECT_TRUE(comp->OnEvent(Event::Escape));
+}
+
+TEST(UiComponentsTest, TaskBoardViewScopeToggleSwitchesAllAndMyTasks) {
+    AppState state;
+    state.session.userId = 1;
+
+    Task checkerOnlyTask;
+    checkerOnlyTask.set_id(1);
+    checkerOnlyTask.set_title("Other task");
+    checkerOnlyTask.set_authorid(1);
+    checkerOnlyTask.add_workerids(2);
+    checkerOnlyTask.set_checkerid(1);
+    checkerOnlyTask.set_status(TaskStatus::ACTIVE);
+
+    Task myWorkerTask;
+    myWorkerTask.set_id(2);
+    myWorkerTask.set_title("My worker task");
+    myWorkerTask.add_workerids(1);
+    myWorkerTask.set_status(TaskStatus::ACTIVE);
+
+    state.tasks = {checkerOnlyTask, myWorkerTask};
+    state.selectedTaskId = 1;
+
+    auto dispatch = [&](const State::Action& a) {
+        state = State::Reducer::Reduce(state, a);
+    };
+
+    auto comp = Views::CreateTaskBoardView(state, dispatch, nullptr);
+    auto screen = Screen::Create(Dimension::Fixed(160), Dimension::Fixed(25));
+    Render(screen, comp->Render());
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("[Show: All Tasks]"), std::string::npos);
+    EXPECT_NE(rendered.find("Other task"), std::string::npos);
+    EXPECT_NE(rendered.find("My worker task"), std::string::npos);
+
+    // Scope toggle button is the initial focus in TaskBoardView: press Return
+    EXPECT_TRUE(comp->OnEvent(Event::Return));
+    EXPECT_TRUE(state.filter.onlyMyTasks);
+
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("[Show: My Tasks]"), std::string::npos);
+    EXPECT_EQ(rendered.find("Other task"), std::string::npos);
+    EXPECT_NE(rendered.find("My worker task"), std::string::npos);
+
+    // Hotkey 'm' toggles back to all tasks
+    EXPECT_TRUE(comp->OnEvent(Event::Character('m')));
+    EXPECT_FALSE(state.filter.onlyMyTasks);
+
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("[Show: All Tasks]"), std::string::npos);
+    EXPECT_NE(rendered.find("Other task"), std::string::npos);
+}
+
+TEST(UiComponentsTest, ReviewViewScopeToggleFiltersByCurrentUser) {
+    AppState state;
+    state.session.userId = 1;
+    state.currentView = ViewType::Review;
+
+    Task workerOnlyReview;
+    workerOnlyReview.set_id(10);
+    workerOnlyReview.set_title("Other review");
+    workerOnlyReview.add_workerids(1);
+    workerOnlyReview.set_checkerid(3);
+    workerOnlyReview.set_status(TaskStatus::IN_REVIEW);
+
+    Task myCheckReview;
+    myCheckReview.set_id(11);
+    myCheckReview.set_title("My check review");
+    myCheckReview.add_workerids(2);
+    myCheckReview.set_checkerid(1);
+    myCheckReview.set_status(TaskStatus::IN_REVIEW);
+
+    state.tasks = {workerOnlyReview, myCheckReview};
+    state.selectedTaskId = 10;
+
+    auto dispatch = [&](const State::Action& a) {
+        state = State::Reducer::Reduce(state, a);
+    };
+
+    auto comp = Views::CreateReviewView(state, dispatch, nullptr);
+    auto screen = Screen::Create(Dimension::Fixed(160), Dimension::Fixed(25));
+    Render(screen, comp->Render());
+    std::string rendered = screen.ToString();
+
+    EXPECT_NE(rendered.find("IN REVIEW (2)"), std::string::npos);
+    EXPECT_NE(rendered.find("[Show: All Tasks]"), std::string::npos);
+    EXPECT_NE(rendered.find("Other review"), std::string::npos);
+    EXPECT_NE(rendered.find("My check review"), std::string::npos);
+
+    // Click/activate the scope toggle button via Return
+    EXPECT_TRUE(comp->OnEvent(Event::Return));
+    EXPECT_TRUE(state.filter.onlyMyTasks);
+
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("IN REVIEW (1)"), std::string::npos);
+    EXPECT_NE(rendered.find("[Show: My Tasks]"), std::string::npos);
+    EXPECT_EQ(rendered.find("Other review"), std::string::npos);
+    EXPECT_NE(rendered.find("My check review"), std::string::npos);
+
+    // Hotkey 'm' switches back to all tasks
+    EXPECT_TRUE(comp->OnEvent(Event::Character('m')));
+    EXPECT_FALSE(state.filter.onlyMyTasks);
+
+    screen.Clear();
+    Render(screen, comp->Render());
+    rendered = screen.ToString();
+    EXPECT_NE(rendered.find("IN REVIEW (2)"), std::string::npos);
+    EXPECT_NE(rendered.find("Other review"), std::string::npos);
 }
 
 } // namespace Aquarium::UI::Tests

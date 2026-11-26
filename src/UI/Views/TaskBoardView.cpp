@@ -95,6 +95,9 @@ CreateTaskBoardView(const State::AppState& state,
         }
     };
 
+    // Scope Toggle Button (All Tasks vs My Tasks)
+    auto btnScopeToggle = CreateTaskScopeToggleButton(state, dispatch);
+
     // Filter Buttons
     ftxui::Components filterButtons;
     for (const auto& [name, statusOpt] : kFilters) {
@@ -242,11 +245,13 @@ CreateTaskBoardView(const State::AppState& state,
 
     // Left Column Renderer
     ftxui::Components leftChildren;
+    leftChildren.push_back(btnScopeToggle);
     leftChildren.push_back(filterBar);
     leftChildren.push_back(searchField);
     auto leftContainer = Container::Vertical(leftChildren);
 
-    auto leftRenderer = Renderer(leftContainer, [&state, filterBar, searchField,
+    auto leftRenderer = Renderer(leftContainer, [&state, btnScopeToggle,
+                                                 filterBar, searchField,
                                                  selectTaskAndFetchComments] {
         // Render Filter Bar
         Elements filterElements;
@@ -262,7 +267,11 @@ CreateTaskBoardView(const State::AppState& state,
             }
         }
         auto filtersHeader = vbox({
-            text("FILTERS:") | bold | color(Color::CyanLight),
+            hbox({
+                text("FILTERS:") | bold | color(Color::CyanLight),
+                filler(),
+                btnScopeToggle->Render(),
+            }),
             hflow(std::move(filterElements)),
         });
 
@@ -358,6 +367,12 @@ CreateTaskBoardView(const State::AppState& state,
         // hotkeys
         if (remarksPane->Focused()) {
             return false;
+        }
+
+        // Hotkey 'm': toggle between my tasks (worker) and all tasks
+        if (event == Event::Character('m')) {
+            dispatch(State::ToggleOnlyMyTasksAction{});
+            return true;
         }
 
         // Hotkey 'f': cycle filters

@@ -63,6 +63,21 @@ bool ContainsCaseInsensitive(std::string_view haystack,
     return lowerHaystack.find(lowerNeedle) != std::string::npos;
 }
 
+void EnsureValidSelectionForFilter(AppState& state) {
+    auto filtered = state.GetFilteredTasks();
+    if (state.selectedTaskId.has_value()) {
+        for (const auto* t : filtered) {
+            if (t->id() == *state.selectedTaskId) {
+                return;
+            }
+        }
+    }
+    state.selectedTaskId = filtered.empty()
+                               ? std::nullopt
+                               : std::make_optional(filtered.front()->id());
+    state.activeComments.clear();
+}
+
 } // namespace
 
 const aquarium::api::Task* AppState::GetSelectedTask() const {
@@ -86,6 +101,25 @@ const aquarium::api::User* AppState::FindUser(std::int64_t id) const {
     return nullptr;
 }
 
+bool AppState::IsTaskAssignedAsWorker(
+    const aquarium::api::Task& task) const {
+    if (session.userId <= 0) {
+        return false;
+    }
+    for (int i = 0; i < task.workerids_size(); ++i) {
+        if (task.workerids(i) == session.userId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AppState::IsTaskAssignedAsChecker(
+    const aquarium::api::Task& task) const {
+    return session.userId > 0 && task.has_checkerid() &&
+           task.checkerid() == session.userId;
+}
+
 std::vector<const aquarium::api::Task*> AppState::GetFilteredTasks() const {
     std::vector<const aquarium::api::Task*> result;
     result.reserve(tasks.size());
@@ -96,6 +130,15 @@ std::vector<const aquarium::api::Task*> AppState::GetFilteredTasks() const {
     for (const auto& task : tasks) {
         if (!seenIds.insert(task.id()).second) {
             continue;
+        }
+
+        if (filter.onlyMyTasks) {
+            const bool isMyTask = currentView == ViewType::Review
+                                      ? IsTaskAssignedAsChecker(task)
+                                      : IsTaskAssignedAsWorker(task);
+            if (!isMyTask) {
+                continue;
+            }
         }
 
         if (currentView == ViewType::Review) {
@@ -133,6 +176,9 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
 
             if constexpr (std::is_same_v<T, NavigateToViewAction>) {
                 state.currentView = a.view;
+                if (a.view == ViewType::Tasks || a.view == ViewType::Review) {
+                    EnsureValidSelectionForFilter(state);
+                }
             } else if constexpr (std::is_same_v<T, OpenModalAction>) {
                 state.activeModal = a.modal;
             } else if constexpr (std::is_same_v<T, CloseModalAction>) {
@@ -146,6 +192,12 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
                 state.filter.statusFilter = a.status;
             } else if constexpr (std::is_same_v<T, SetSearchQueryAction>) {
                 state.filter.searchQuery = a.query;
+            } else if constexpr (std::is_same_v<T, SetOnlyMyTasksAction>) {
+                state.filter.onlyMyTasks = a.onlyMyTasks;
+                EnsureValidSelectionForFilter(state);
+            } else if constexpr (std::is_same_v<T, ToggleOnlyMyTasksAction>) {
+                state.filter.onlyMyTasks = !state.filter.onlyMyTasks;
+                EnsureValidSelectionForFilter(state);
             } else if constexpr (std::is_same_v<T, ShowToastAction>) {
                 state.activeToast = ToastMessage{
                     .message = a.message,

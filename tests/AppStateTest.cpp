@@ -27,6 +27,7 @@ TEST_F(AppStateTest, InitialStateDefaults) {
     EXPECT_FALSE(_state.selectedTaskId.has_value());
     EXPECT_FALSE(_state.filter.statusFilter.has_value());
     EXPECT_TRUE(_state.filter.searchQuery.empty());
+    EXPECT_FALSE(_state.filter.onlyMyTasks);
     EXPECT_FALSE(_state.session.IsAuthenticated());
 }
 
@@ -75,6 +76,18 @@ TEST_F(AppStateTest, FiltersAndSearchQuery) {
 
     _state = Reducer::Reduce(_state, SetSearchQueryAction{"deploy pipeline"});
     EXPECT_EQ(_state.filter.searchQuery, "deploy pipeline");
+
+    _state = Reducer::Reduce(_state, ToggleOnlyMyTasksAction{});
+    EXPECT_TRUE(_state.filter.onlyMyTasks);
+
+    _state = Reducer::Reduce(_state, ToggleOnlyMyTasksAction{});
+    EXPECT_FALSE(_state.filter.onlyMyTasks);
+
+    _state = Reducer::Reduce(_state, SetOnlyMyTasksAction{true});
+    EXPECT_TRUE(_state.filter.onlyMyTasks);
+
+    _state = Reducer::Reduce(_state, SetOnlyMyTasksAction{false});
+    EXPECT_FALSE(_state.filter.onlyMyTasks);
 }
 
 TEST_F(AppStateTest, ToastLifecycle) {
@@ -321,9 +334,91 @@ TEST_F(AppStateTest, ExitProjectClearsSessionAndDataAndOpensProjectModal) {
     EXPECT_TRUE(_state.activeComments.empty());
     EXPECT_TRUE(_state.users.empty());
     EXPECT_TRUE(_state.filter.searchQuery.empty());
+    EXPECT_FALSE(_state.filter.onlyMyTasks);
     EXPECT_EQ(_state.connectionStatus, ConnectionStatus::Offline);
     EXPECT_EQ(_state.currentView, ViewType::Tasks);
     EXPECT_EQ(_state.activeModal, ModalType::ProjectModal);
+}
+
+TEST_F(AppStateTest, GetFilteredTasksOnlyMyTasksMatchesWorkerInTasksAndCheckerInReview) {
+    _state.session.userId = 10;
+
+    Task authoredOnly;
+    authoredOnly.set_id(1);
+    authoredOnly.set_title("Authored only");
+    authoredOnly.set_authorid(10);
+    authoredOnly.add_workerids(20);
+    authoredOnly.set_checkerid(30);
+    authoredOnly.set_status(TaskStatus::ACTIVE);
+
+    Task workerTask;
+    workerTask.set_id(2);
+    workerTask.set_title("Assigned worker");
+    workerTask.set_authorid(20);
+    workerTask.add_workerids(20);
+    workerTask.add_workerids(10);
+    workerTask.set_status(TaskStatus::ACTIVE);
+
+    Task checkerTask;
+    checkerTask.set_id(3);
+    checkerTask.set_title("Assigned checker");
+    checkerTask.set_authorid(20);
+    checkerTask.add_workerids(30);
+    checkerTask.set_checkerid(10);
+    checkerTask.set_status(TaskStatus::IN_REVIEW);
+
+    Task workerInReviewTask;
+    workerInReviewTask.set_id(4);
+    workerInReviewTask.set_title("Worker in review");
+    workerInReviewTask.set_authorid(20);
+    workerInReviewTask.add_workerids(10);
+    workerInReviewTask.set_checkerid(30);
+    workerInReviewTask.set_status(TaskStatus::IN_REVIEW);
+
+    Task bothRolesTask;
+    bothRolesTask.set_id(5);
+    bothRolesTask.set_title("Worker and checker");
+    bothRolesTask.set_authorid(10);
+    bothRolesTask.add_workerids(10);
+    bothRolesTask.set_checkerid(10);
+    bothRolesTask.set_status(TaskStatus::IN_REVIEW);
+
+    _state.tasks = {authoredOnly, workerTask, checkerTask, workerInReviewTask,
+                    bothRolesTask};
+    _state.selectedTaskId = 1;
+
+    EXPECT_EQ(_state.GetFilteredTasks().size(), 5);
+
+    // In Tasks view, My Tasks shows only tasks where user is a worker.
+    _state = Reducer::Reduce(_state, ToggleOnlyMyTasksAction{});
+    auto myWorkTasks = _state.GetFilteredTasks();
+    ASSERT_EQ(myWorkTasks.size(), 3);
+    EXPECT_EQ(myWorkTasks[0]->id(), 2);
+    EXPECT_EQ(myWorkTasks[1]->id(), 4);
+    EXPECT_EQ(myWorkTasks[2]->id(), 5);
+    EXPECT_EQ(_state.selectedTaskId, 2);
+
+    _state = Reducer::Reduce(_state, SetStatusFilterAction{TaskStatus::ACTIVE});
+    auto myActiveTasks = _state.GetFilteredTasks();
+    ASSERT_EQ(myActiveTasks.size(), 1);
+    EXPECT_EQ(myActiveTasks[0]->id(), 2);
+
+    _state = Reducer::Reduce(_state, SetStatusFilterAction{std::nullopt});
+    _state = Reducer::Reduce(_state, SetSearchQueryAction{"checker"});
+    auto mySearched = _state.GetFilteredTasks();
+    ASSERT_EQ(mySearched.size(), 1);
+    EXPECT_EQ(mySearched[0]->id(), 5);
+
+    // In Review view, My Tasks shows only IN_REVIEW tasks where user is checker.
+    _state = Reducer::Reduce(_state, SetSearchQueryAction{""});
+    _state = Reducer::Reduce(_state, NavigateToViewAction{ViewType::Review});
+    auto myReviewTasks = _state.GetFilteredTasks();
+    ASSERT_EQ(myReviewTasks.size(), 2);
+    EXPECT_EQ(myReviewTasks[0]->id(), 3);
+    EXPECT_EQ(myReviewTasks[1]->id(), 5);
+
+    _state.session.userId = 0;
+    EXPECT_TRUE(_state.GetFilteredTasks().empty());
 }
 
 } // namespace Aquarium::State::Tests

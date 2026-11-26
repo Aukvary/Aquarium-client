@@ -1,9 +1,16 @@
 #pragma once
 
+#include "State/Actions.hpp"
+#include "State/AppState.hpp"
+
+#include <ftxui/component/component.hpp>
+#include <ftxui/component/component_options.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/color.hpp>
+#include <functional>
 #include <string>
 #include <TaskStoreService.pb.h>
+#include <utility>
 
 namespace Aquarium::UI {
 
@@ -59,6 +66,33 @@ inline ftxui::Element RenderTerminalTooSmallWarning(int currentWidth,
                ftxui::filler(),
            }) |
            ftxui::border | ftxui::center;
+}
+
+inline ftxui::Component CreateTaskScopeToggleButton(
+    const State::AppState& state,
+    std::function<void(const State::Action&)> dispatch) {
+    ftxui::ButtonOption opt;
+    opt.label = "Scope";
+    opt.on_click = [dispatch = std::move(dispatch)] {
+        dispatch(State::ToggleOnlyMyTasksAction{});
+    };
+    opt.transform = [&state](const ftxui::EntryState& s) {
+        const std::string label = state.filter.onlyMyTasks
+                                      ? "[Show: My Tasks]"
+                                      : "[Show: All Tasks]";
+        auto elem = ftxui::text(label);
+        if (state.filter.onlyMyTasks) {
+            elem =
+                elem | ftxui::color(ftxui::Color::YellowLight) | ftxui::bold;
+        } else {
+            elem = elem | ftxui::color(ftxui::Color::CyanLight);
+        }
+        if (s.focused) {
+            elem = elem | ftxui::inverted;
+        }
+        return elem;
+    };
+    return ftxui::Button(std::move(opt));
 }
 
 } // namespace Aquarium::UI

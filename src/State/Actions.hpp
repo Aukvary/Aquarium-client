@@ -35,6 +35,12 @@ struct SetSearchQueryAction {
     std::string query;
 };
 
+struct SetOnlyMyTasksAction {
+    bool onlyMyTasks{false};
+};
+
+struct ToggleOnlyMyTasksAction {};
+
 struct ShowToastAction {
     std::string message;
     ToastSeverity severity{ToastSeverity::Info};
@@ -113,6 +119,8 @@ using Action = std::variant<NavigateToViewAction,
                             SelectTaskAction,
                             SetStatusFilterAction,
                             SetSearchQueryAction,
+                            SetOnlyMyTasksAction,
+                            ToggleOnlyMyTasksAction,
                             ShowToastAction,
                             DismissToastAction,
                             SetConnectionStatusAction,
