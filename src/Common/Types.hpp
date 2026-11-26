@@ -88,8 +88,8 @@ private:
     std::variant<T, AppError> _data;
 
 public:
-    Result(T value) : _data(std::move(value)) {}
-    Result(AppError error) : _data(std::move(error)) {}
+    explicit Result(T value) : _data(std::move(value)) {}
+    explicit Result(AppError error) : _data(std::move(error)) {}
 
     [[nodiscard]] bool HasValue() const noexcept {
         return std::holds_alternative<T>(_data);
@@ -126,7 +126,7 @@ private:
 
 public:
     Result() : _error(AppError{}) {}
-    Result(AppError error) : _error(std::move(error)) {}
+    explicit Result(AppError error) : _error(std::move(error)) {}
 
     [[nodiscard]] bool HasValue() const noexcept {
         return _error.IsOk();
