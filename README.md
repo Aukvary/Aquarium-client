@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/Aukvary/Aquarium-client/main/script
 
 Скрипт [scripts/install.sh](scripts/install.sh):
 - на **Arch-подобных дистрибутивах** скачивает [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD) и устанавливает системный пакет `pacman` через `makepkg -si` (удалить можно через `sudo pacman -R aquarium-client`);
-- на **Fedora** и **Debian/Ubuntu** устанавливает системные зависимости (`cmake`, `protobuf`, `grpc`) и собирает релиз `v1.0.0` в `/usr/local/bin/aquarium-client`.
+- на **Fedora** и **Debian/Ubuntu** устанавливает системные зависимости (`cmake`, `protobuf`, `grpc`) и собирает релиз `v1.0.2` в `/usr/local/bin/aquarium-client`.
 
 ---
 

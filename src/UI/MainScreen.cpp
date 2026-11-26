@@ -463,11 +463,11 @@ void MainScreen::HandleDeleteProject(const std::string& server,
     }
 
     _actionThread = std::jthread([this, server, entry](std::stop_token) {
-        Common::Result<bool> res = Common::AppError{
+        Common::Result<bool> res(Common::AppError{
             .code = Common::AppErrorCode::INTERNAL_ERROR,
             .message = "Client unavailable",
             .details = "",
-        };
+        });
 
         if (_backendClient &&
             _backendClient->GetTargetServer() == "custom_channel") {
