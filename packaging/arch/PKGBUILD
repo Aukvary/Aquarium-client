@@ -20,6 +20,7 @@ build() {
   cmake -B build -S "Aquarium-client-${pkgver}" -G Ninja \
     -DCMAKE_BUILD_TYPE=None \
     -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_DISABLE_FIND_PACKAGE_ftxui=TRUE \
     -DFETCHCONTENT_SOURCE_DIR_FTXUI="$srcdir/FTXUI-5.0.0" \
     -Wno-dev
   cmake --build build

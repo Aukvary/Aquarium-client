@@ -13,7 +13,7 @@ include(CTest)
 include(FetchContent)
 include(GNUInstallDirs)
 
-find_package(ftxui CONFIG QUIET)
+find_package(ftxui 5 CONFIG QUIET)
 if(NOT ftxui_FOUND)
   set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(

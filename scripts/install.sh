@@ -41,10 +41,12 @@ build_from_source() {
   if command -v ninja >/dev/null 2>&1; then
     cmake -B "${TMP_DIR}/build" -S "${TMP_DIR}/Aquarium-client" -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_DISABLE_FIND_PACKAGE_ftxui=TRUE \
       -DBUILD_TESTING=OFF
   else
     cmake -B "${TMP_DIR}/build" -S "${TMP_DIR}/Aquarium-client" \
       -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_DISABLE_FIND_PACKAGE_ftxui=TRUE \
       -DBUILD_TESTING=OFF
   fi
 
