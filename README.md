@@ -31,15 +31,17 @@
 
 ---
 
-## Установка (Arch Linux)
+## Установка (Linux)
 
-Установить `aquarium-client` как системный пакет `pacman` можно одной командой (используется [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD)):
+Установить `aquarium-client` одной командой (работает в **bash**, **zsh** и **fish**):
 
-```bash
-tmpdir=$(mktemp -d) && curl -fsSL https://raw.githubusercontent.com/Aukvary/Aquarium-client/main/packaging/arch/PKGBUILD -o "$tmpdir/PKGBUILD" && (cd "$tmpdir" && makepkg -si) && rm -rf "$tmpdir"
+```sh
+curl -fsSL https://raw.githubusercontent.com/Aukvary/Aquarium-client/main/scripts/install.sh | sh
 ```
 
-После установки приложение доступно как `aquarium-client`, а удалить пакет можно стандартно через `sudo pacman -R aquarium-client`.
+Скрипт [scripts/install.sh](scripts/install.sh):
+- на **Arch-подобных дистрибутивах** скачивает [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD) и устанавливает системный пакет `pacman` через `makepkg -si` (удалить можно через `sudo pacman -R aquarium-client`);
+- на **Fedora** и **Debian/Ubuntu** устанавливает системные зависимости (`cmake`, `protobuf`, `grpc`) и собирает релиз `v1.0.0` в `/usr/local/bin/aquarium-client`.
 
 ---
 
