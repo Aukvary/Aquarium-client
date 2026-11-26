@@ -1,6 +1,6 @@
 # Maintainer: Aukvary <aukvary@yandex.ru>
 pkgname=aquarium-client
-pkgver=1.0.0
+pkgver=1.0.1
 pkgrel=1
 pkgdesc="Interactive TUI client for Aquarium task tracker (FTXUI + gRPC)"
 arch=('x86_64')

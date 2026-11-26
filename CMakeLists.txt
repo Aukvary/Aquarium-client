@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(aquarium-client VERSION 1.0.0 LANGUAGES CXX)
+project(
+  aquarium-client
+  VERSION 1.0.1
+  LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,7 +18,9 @@ include(GNUInstallDirs)
 
 find_package(ftxui 5 CONFIG QUIET)
 if(NOT ftxui_FOUND)
-  set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+  set(FTXUI_ENABLE_INSTALL
+      OFF
+      CACHE BOOL "" FORCE)
   FetchContent_Declare(
     ftxui
     GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
@@ -35,7 +40,9 @@ endif()
 if(BUILD_TESTING)
   find_package(GTest QUIET)
   if(NOT GTest_FOUND)
-    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    set(INSTALL_GTEST
+        OFF
+        CACHE BOOL "" FORCE)
     FetchContent_Declare(
       googletest
       GIT_REPOSITORY https://github.com/google/googletest.git
