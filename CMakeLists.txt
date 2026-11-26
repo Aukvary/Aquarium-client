@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(aquarium-client CXX)
+project(aquarium-client VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,14 +9,20 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_compile_options(-Wall -Wextra -Wpedantic)
 
+include(CTest)
 include(FetchContent)
+include(GNUInstallDirs)
 
-FetchContent_Declare(
-  ftxui
-  GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
-  GIT_TAG v5.0.0
-  GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(ftxui)
+find_package(ftxui CONFIG QUIET)
+if(NOT ftxui_FOUND)
+  set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    ftxui
+    GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+    GIT_TAG v5.0.0
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(ftxui)
+endif()
 
 find_package(nlohmann_json CONFIG QUIET)
 if(NOT nlohmann_json_FOUND)
@@ -26,14 +32,17 @@ if(NOT nlohmann_json_FOUND)
   FetchContent_MakeAvailable(nlohmann_json)
 endif()
 
-find_package(GTest QUIET)
-if(NOT GTest_FOUND)
-  FetchContent_Declare(
-    googletest
-    GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.14.0
-    GIT_SHALLOW TRUE)
-  FetchContent_MakeAvailable(googletest)
+if(BUILD_TESTING)
+  find_package(GTest QUIET)
+  if(NOT GTest_FOUND)
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+      googletest
+      GIT_REPOSITORY https://github.com/google/googletest.git
+      GIT_TAG v1.14.0
+      GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(googletest)
+  endif()
 endif()
 
 find_package(Protobuf CONFIG REQUIRED)
@@ -131,18 +140,20 @@ target_include_directories(aquarium-client
 
 target_link_libraries(aquarium-client PRIVATE aquarium-client-core)
 
-enable_testing()
+install(TARGETS aquarium-client RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-add_executable(
-  aquarium-client-unittest tests/AppStateTest.cpp tests/ConfigTest.cpp
-                           tests/GrpcMockTest.cpp tests/UiComponentsTest.cpp)
+if(BUILD_TESTING)
+  add_executable(
+    aquarium-client-unittest tests/AppStateTest.cpp tests/ConfigTest.cpp
+                             tests/GrpcMockTest.cpp tests/UiComponentsTest.cpp)
 
-target_include_directories(aquarium-client-unittest
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_include_directories(aquarium-client-unittest
+                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_link_libraries(
-  aquarium-client-unittest PRIVATE aquarium-client-core GTest::gtest
-                                   GTest::gtest_main)
+  target_link_libraries(
+    aquarium-client-unittest PRIVATE aquarium-client-core GTest::gtest
+                                     GTest::gtest_main)
 
-include(GoogleTest)
-gtest_discover_tests(aquarium-client-unittest)
+  include(GoogleTest)
+  gtest_discover_tests(aquarium-client-unittest)
+endif()
