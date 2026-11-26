@@ -1,0 +1,36 @@
+# Maintainer: Aukvary <aukvary@yandex.ru>
+pkgname=aquarium-client
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Interactive TUI client for Aquarium task tracker (FTXUI + gRPC)"
+arch=('x86_64')
+url="https://github.com/Aukvary/Aquarium-client"
+license=('MIT')
+depends=('abseil-cpp' 'grpc' 'protobuf')
+makedepends=('cmake' 'ninja' 'nlohmann-json')
+checkdepends=('gtest')
+source=(
+  "${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz"
+  "ftxui-5.0.0.tar.gz::https://github.com/ArthurSonzogni/FTXUI/archive/refs/tags/v5.0.0.tar.gz"
+)
+sha256sums=('fe3ea172684d307898f34631fca2c23b7b9d7785cb33126e977273304278b5a0'
+            'a2991cb222c944aee14397965d9f6b050245da849d8c5da7c72d112de2786b5b')
+
+build() {
+  cmake -B build -S "Aquarium-client-${pkgver}" -G Ninja \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DFETCHCONTENT_SOURCE_DIR_FTXUI="$srcdir/FTXUI-5.0.0" \
+    -Wno-dev
+  cmake --build build
+}
+
+check() {
+  ctest --test-dir build --output-on-failure
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  install -Dm644 "Aquarium-client-${pkgver}/LICENSE" \
+    "$pkgdir/usr/share/licenses/${pkgname}/LICENSE"
+}
