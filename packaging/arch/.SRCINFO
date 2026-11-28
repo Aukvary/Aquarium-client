@@ -1,6 +1,6 @@
 pkgbase = aquarium-client
 	pkgdesc = Interactive TUI client for Aquarium task tracker (FTXUI + gRPC)
-	pkgver = 1.0.2
+	pkgver = 1.0.3
 	pkgrel = 1
 	url = https://github.com/Aukvary/Aquarium-client
 	arch = x86_64
@@ -13,7 +13,7 @@ pkgbase = aquarium-client
 	depends = abseil-cpp
 	depends = grpc
 	depends = protobuf
-	source = aquarium-client::git+https://github.com/Aukvary/Aquarium-client.git#tag=v1.0.2
+	source = aquarium-client::git+https://github.com/Aukvary/Aquarium-client.git#tag=v1.0.3
 	source = ftxui-5.0.0.tar.gz::https://github.com/ArthurSonzogni/FTXUI/archive/refs/tags/v5.0.0.tar.gz
 	sha256sums = SKIP
 	sha256sums = a2991cb222c944aee14397965d9f6b050245da849d8c5da7c72d112de2786b5b

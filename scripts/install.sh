@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${AQUARIUM_VERSION:-1.0.2}"
+VERSION="${AQUARIUM_VERSION:-1.0.3}"
 REPO_URL="https://github.com/Aukvary/Aquarium-client"
 RAW_BASE="https://raw.githubusercontent.com/Aukvary/Aquarium-client/main"
 
