@@ -1,6 +1,7 @@
 #include "./EventSubscriber.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -8,10 +9,10 @@
 
 namespace Aquarium::Grpc {
 
-EventSubscriber::EventSubscriber(std::shared_ptr<BackendClient> client,
+EventSubscriber::EventSubscriber(BackendClient& client,
                                  EventCallback eventCallback,
                                  ReconnectCallback reconnectCallback)
-    : _client(std::move(client)), _eventCallback(std::move(eventCallback)),
+    : _client(client), _eventCallback(std::move(eventCallback)),
       _reconnectCallback(std::move(reconnectCallback)) {}
 
 EventSubscriber::~EventSubscriber() {
@@ -28,6 +29,7 @@ void EventSubscriber::Start() {
 }
 
 void EventSubscriber::Stop() {
+    _workerThread.request_stop();
     {
         std::scoped_lock lock(_mutex);
         if (!_running) {
@@ -40,13 +42,12 @@ void EventSubscriber::Stop() {
     }
     _cv.notify_all();
     if (_workerThread.joinable()) {
-        _workerThread.request_stop();
         _workerThread.join();
     }
 }
 
 bool EventSubscriber::IsRunning() const noexcept {
-    return _running;
+    return _running.load(std::memory_order_acquire);
 }
 
 void EventSubscriber::RunLoop(std::stop_token stopToken) {
@@ -56,17 +57,18 @@ void EventSubscriber::RunLoop(std::stop_token stopToken) {
 
     while (!stopToken.stop_requested()) {
         std::unique_ptr<grpc::ClientContext> context;
-        if (_client) {
-            context = _client->CreateStreamContext();
-        }
+        context = _client.CreateStreamContext();
 
         if (context) {
             {
                 std::scoped_lock lock(_mutex);
+                if (stopToken.stop_requested()) {
+                    break;
+                }
                 _activeContext = context.get();
             }
 
-            auto reader = _client->SubscribeEvents(context.get());
+            auto reader = _client.SubscribeEvents(context.get());
             if (reader) {
                 if (!isInitial && _reconnectCallback) {
                     _reconnectCallback();

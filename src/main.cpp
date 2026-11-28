@@ -2,47 +2,37 @@
 #include "Grpc/BackendClient.hpp"
 #include "UI/MainScreen.hpp"
 
+#include <cstdlib>
 #include <iostream>
-#include <memory>
+#include <ranges>
 #include <span>
-#include <string>
 #include <string_view>
-#include <vector>
 
 int main(int argc, char* argv[]) {
     using Aquarium::Config::ConfigManager;
     using Aquarium::Grpc::BackendClient;
     using Aquarium::UI::MainScreen;
 
-    std::vector<std::string_view> args;
-    if (argc > 0 && argv != nullptr) {
-        const std::span<char*> rawArgs(argv, static_cast<std::size_t>(argc));
-        args.assign(rawArgs.begin(), rawArgs.end());
-    }
-    auto overrides = ConfigManager::ParseCommandLine(args);
+    std::span<char*> args_s(argv, static_cast<std::size_t>(argc));
+    auto overrides = ConfigManager::ParseCommandLine(
+        args_s | std::ranges::views::drop(1) |
+        std::ranges::views::transform(
+            [](char* raw) -> std::string_view { return raw; }));
+
     if (overrides.showHelp) {
         std::cout << "Usage: aquarium-client [options]\n"
-                  << "Options:\n"
-                  << "  -s, --server <host:port>  Target server address\n"
-                  << "  -t, --token <token>       Authentication token\n"
-                  << "  --smoke-test              Run smoke test and exit\n"
-                  << "  -h, --help                Show this help message\n";
+                     "Options:\n"
+                     "  -s, --server <host:port>  Target server address\n"
+                     "  -t, --token <token>       Authentication token\n"
+                     "  -h, --help                Show this help message\n";
         return 0;
     }
 
-    if (overrides.smokeTest) {
-        std::cout << "Aquarium client smoke test passed." << std::endl;
-        return 0;
-    }
+    ConfigManager configManager;
+    configManager.Load();
+    configManager.ApplyOverrides(overrides);
 
-    auto configManager = std::make_shared<ConfigManager>();
-    configManager->Load();
-    configManager->ApplyOverrides(overrides);
-
-    auto backendClient = std::make_shared<BackendClient>(
-        configManager->GetActiveServer(), configManager->GetActiveToken());
-
-    MainScreen mainScreen(configManager, backendClient);
+    MainScreen mainScreen(configManager);
     mainScreen.Run();
 
     return 0;

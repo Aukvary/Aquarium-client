@@ -6,11 +6,13 @@
 #include "UI/UIHelpers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -21,8 +23,8 @@ using aquarium::api::TaskStatus;
 
 namespace {
 
-const std::vector<std::pair<std::string, std::optional<TaskStatus>>> kFilters =
-    {
+constexpr std::array<std::pair<std::string_view, std::optional<TaskStatus>>, 7>
+    kFilters = {{
         {"ALL", std::nullopt},
         {"PLAN", TaskStatus::PLAN},
         {"ACTIVE", TaskStatus::ACTIVE},
@@ -30,7 +32,7 @@ const std::vector<std::pair<std::string, std::optional<TaskStatus>>> kFilters =
         {"COMPLETE", TaskStatus::COMPLETE},
         {"VERIFIED", TaskStatus::VERIFIED},
         {"ARCHIVE", TaskStatus::ARCHIVE},
-};
+    }};
 
 class SearchInputWrapper : public ComponentBase {
 public:
@@ -79,37 +81,33 @@ private:
 Component
 CreateTaskBoardView(const State::AppState& state,
                     std::function<void(const State::Action&)> dispatch,
-                    std::shared_ptr<Grpc::BackendClient> client) {
+                    Grpc::BackendClient& client) {
     auto searchQuery = std::make_shared<std::string>(state.filter.searchQuery);
 
-    auto selectTaskAndFetchComments = [dispatch, client](std::int64_t taskId) {
+    auto selectTaskAndFetchComments = [dispatch, &client](std::int64_t taskId) {
         dispatch(State::SelectTaskAction{taskId});
-        if (client) {
-            auto commentsRes = client->GetComments(taskId);
-            if (commentsRes.HasValue()) {
-                dispatch(State::CommentsLoadedAction{
-                    .taskId = taskId,
-                    .comments = commentsRes.Value(),
-                });
-            }
+        auto commentsRes = client.GetComments(taskId);
+        if (commentsRes.HasValue()) {
+            dispatch(State::CommentsLoadedAction{
+                .taskId = taskId,
+                .comments = commentsRes.Value(),
+            });
         }
     };
 
-    // Scope Toggle Button (All Tasks vs My Tasks)
     auto btnScopeToggle = CreateTaskScopeToggleButton(state, dispatch);
-
-    // Filter Buttons
     ftxui::Components filterButtons;
+    filterButtons.reserve(kFilters.size());
     for (const auto& [name, statusOpt] : kFilters) {
         auto btn = Button(
-            name,
+            std::string(name),
             [dispatch, statusOpt = statusOpt] {
                 dispatch(State::SetStatusFilterAction{statusOpt});
             },
             ButtonOption::Simple());
-        filterButtons.push_back(btn);
+        filterButtons.push_back(std::move(btn));
     }
-    auto filterBar = Container::Horizontal(filterButtons);
+    auto filterBar = Container::Horizontal(std::move(filterButtons));
 
     // Search Field
     InputOption searchOpt;
@@ -126,19 +124,17 @@ CreateTaskBoardView(const State::AppState& state,
     auto searchField =
         Make<SearchInputWrapper>(rawSearchField, searchQuery, state, dispatch);
 
-    // Center Details Pane Callbacks
-    auto updateTaskStatus = [dispatch, client](std::int64_t taskId,
-                                               TaskStatus targetStatus) {
-        if (!client) {
-            return;
-        }
-        auto res = client->UpdateTaskStatus(taskId, targetStatus);
+    auto updateTaskStatus = [dispatch, &client](std::int64_t taskId,
+                                                TaskStatus targetStatus) {
+        auto res = client.UpdateTaskStatus(taskId, targetStatus);
         if (res.HasValue()) {
             const auto updatedStatus = res.Value().status();
             dispatch(State::TaskUpdatedAction{res.Value()});
+            std::string toastMsg = "Task #" + std::to_string(taskId);
+            toastMsg += " moved to ";
+            toastMsg += GetStatusBadge(updatedStatus).text;
             dispatch(State::ShowToastAction{
-                .message = "Task #" + std::to_string(taskId) + " moved to " +
-                           GetStatusBadge(updatedStatus).text,
+                .message = std::move(toastMsg),
                 .severity = State::ToastSeverity::Success,
             });
         } else {
@@ -166,15 +162,15 @@ CreateTaskBoardView(const State::AppState& state,
                 updateTaskStatus(taskId, targetStatus);
             },
         .onAssignWorker =
-            [&state, dispatch, client](std::int64_t taskId) {
-                if (!client || state.session.userId == 0) {
+            [&state, dispatch, &client](std::int64_t taskId) {
+                if (state.session.userId == 0) {
                     dispatch(State::ShowToastAction{
                         .message = "Cannot assign: unauthenticated user.",
                         .severity = State::ToastSeverity::Warning,
                     });
                     return;
                 }
-                auto res = client->AssignWorker(taskId, state.session.userId);
+                auto res = client.AssignWorker(taskId, state.session.userId);
                 if (res.HasValue()) {
                     dispatch(State::TaskUpdatedAction{res.Value()});
                     dispatch(State::ShowToastAction{
@@ -190,11 +186,8 @@ CreateTaskBoardView(const State::AppState& state,
                 }
             },
         .onDeleteTask =
-            [dispatch, client](std::int64_t taskId) {
-                if (!client) {
-                    return;
-                }
-                auto res = client->DeleteTask(taskId);
+            [dispatch, &client](std::int64_t taskId) {
+                auto res = client.DeleteTask(taskId);
                 if (res.HasValue()) {
                     dispatch(State::TaskDeletedAction{taskId});
                     dispatch(State::ShowToastAction{
@@ -213,15 +206,11 @@ CreateTaskBoardView(const State::AppState& state,
     auto detailsPane =
         Components::CreateTaskDetailsPane(state, detailsCallbacks);
 
-    // Right Remarks Pane Callbacks
     Components::RemarksCallbacks remarksCallbacks{
         .onAddComment =
-            [&state, dispatch, client](std::int64_t taskId,
-                                       const std::string& content) {
-                if (!client) {
-                    return;
-                }
-                auto res = client->AddComment(
+            [&state, dispatch, &client](std::int64_t taskId,
+                                        const std::string& content) {
+                auto res = client.AddComment(
                     taskId, content,
                     aquarium::api::CommentType::COMMENT_GENERAL,
                     state.session.userId > 0
@@ -244,78 +233,77 @@ CreateTaskBoardView(const State::AppState& state,
     auto remarksPane = Components::CreateRemarksPane(state, remarksCallbacks);
 
     // Left Column Renderer
-    ftxui::Components leftChildren;
-    leftChildren.push_back(btnScopeToggle);
-    leftChildren.push_back(filterBar);
-    leftChildren.push_back(searchField);
-    auto leftContainer = Container::Vertical(leftChildren);
+    auto leftContainer =
+        Container::Vertical({btnScopeToggle, filterBar, searchField});
 
-    auto leftRenderer = Renderer(leftContainer, [&state, btnScopeToggle,
-                                                 filterBar, searchField,
-                                                 selectTaskAndFetchComments] {
-        // Render Filter Bar
-        Elements filterElements;
-        for (size_t i = 0; i < kFilters.size(); ++i) {
-            const auto& [name, statusOpt] = kFilters[i];
-            bool isActive = state.filter.statusFilter == statusOpt;
-            auto btnElem = filterBar->ChildAt(i)->Render();
-            if (isActive) {
-                filterElements.push_back(btnElem | color(Color::CyanLight) |
-                                         bold | inverted);
-            } else {
-                filterElements.push_back(btnElem);
-            }
-        }
-        auto filtersHeader = vbox({
-            hbox({
-                text("FILTERS:") | bold | color(Color::CyanLight),
-                filler(),
-                btnScopeToggle->Render(),
-            }),
-            hflow(std::move(filterElements)),
-        });
-
-        // Render Task List
-        auto filteredTasks = state.GetFilteredTasks();
-        Elements taskRows;
-        if (filteredTasks.empty()) {
-            taskRows.push_back(text("No tasks found.") | dim | center);
-        } else {
-            for (const auto* task : filteredTasks) {
-                bool isSelected = state.selectedTaskId.has_value() &&
-                                  *state.selectedTaskId == task->id();
-
-                std::string idStr = "#" + std::to_string(task->id()) + " ";
-                auto idElem = text(idStr) | bold;
-                auto badgeElem = RenderStatusBadge(task->status());
-                auto titleElem = text(" " + task->title()) | flex;
-
-                auto row = hbox({
-                    idElem,
-                    badgeElem,
-                    titleElem,
-                });
-
-                if (isSelected) {
-                    taskRows.push_back(ftxui::select(
-                        row | color(Color::CyanLight) | bold | inverted));
+    auto leftRenderer =
+        Renderer(leftContainer, [&state, btnScopeToggle, filterBar, searchField,
+                                 selectTaskAndFetchComments] {
+            // Render Filter Bar
+            Elements filterElements;
+            filterElements.reserve(kFilters.size());
+            for (size_t i = 0; i < kFilters.size(); ++i) {
+                const auto& [name, statusOpt] = kFilters[i];
+                bool isActive = state.filter.statusFilter == statusOpt;
+                auto btnElem = filterBar->ChildAt(i)->Render();
+                if (isActive) {
+                    filterElements.push_back(btnElem | color(Color::CyanLight) |
+                                             bold | inverted);
                 } else {
-                    taskRows.push_back(row);
+                    filterElements.push_back(btnElem);
                 }
             }
-        }
+            auto filtersHeader = vbox({
+                hbox({
+                    text("FILTERS:") | bold | color(Color::CyanLight),
+                    filler(),
+                    btnScopeToggle->Render(),
+                }),
+                hflow(std::move(filterElements)),
+            });
 
-        auto taskListArea = vbox(std::move(taskRows)) | yframe | flex;
+            // Render Task List
+            auto filteredTasks = state.GetFilteredTasks();
+            Elements taskRows;
+            if (filteredTasks.empty()) {
+                taskRows.push_back(text("No tasks found.") | dim | center);
+            } else {
+                taskRows.reserve(filteredTasks.size());
+                for (const auto* task : filteredTasks) {
+                    bool isSelected = state.selectedTaskId.has_value() &&
+                                      *state.selectedTaskId == task->id();
 
-        return vbox({
-                   filtersHeader,
-                   separator(),
-                   searchField->Render(),
-                   separator(),
-                   taskListArea,
-               }) |
-               border;
-    });
+                    std::string idStr = "#" + std::to_string(task->id()) + " ";
+                    auto idElem = text(idStr) | bold;
+                    auto badgeElem = RenderStatusBadge(task->status());
+                    auto titleElem = text(" " + task->title()) | flex;
+
+                    auto row = hbox({
+                        idElem,
+                        badgeElem,
+                        titleElem,
+                    });
+
+                    if (isSelected) {
+                        taskRows.push_back(ftxui::select(
+                            row | color(Color::CyanLight) | bold | inverted));
+                    } else {
+                        taskRows.push_back(row);
+                    }
+                }
+            }
+
+            auto taskListArea = vbox(std::move(taskRows)) | yframe | flex;
+
+            return vbox({
+                       filtersHeader,
+                       separator(),
+                       searchField->Render(),
+                       separator(),
+                       taskListArea,
+                   }) |
+                   border;
+        });
 
     auto mainColumns = Container::Horizontal({
         leftRenderer,

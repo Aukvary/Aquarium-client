@@ -1,7 +1,9 @@
 #include "./Reducer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <string>
 #include <string_view>
@@ -13,17 +15,17 @@ namespace Aquarium::State {
 
 namespace {
 
-std::string Trim(std::string_view str) {
+std::string_view Trim(std::string_view str) noexcept {
     size_t first = str.find_first_not_of(" \t\n\r");
     if (first == std::string_view::npos) {
-        return "";
+        return {};
     }
     size_t last = str.find_last_not_of(" \t\n\r");
-    return std::string(str.substr(first, (last - first + 1)));
+    return str.substr(first, last - first + 1);
 }
 
-std::string ToLowerUtf8(std::string_view str) {
-    std::string result;
+void ToLowerUtf8Into(std::string_view str, std::string& result) {
+    result.clear();
     result.reserve(str.size());
     for (size_t i = 0; i < str.size(); ++i) {
         auto c = static_cast<unsigned char>(str[i]);
@@ -50,17 +52,16 @@ std::string ToLowerUtf8(std::string_view str) {
         }
         result.push_back(static_cast<char>(std::tolower(c)));
     }
-    return result;
 }
 
-bool ContainsCaseInsensitive(std::string_view haystack,
-                             std::string_view needle) {
-    if (needle.empty()) {
+bool ContainsLowerNeedle(std::string_view haystack,
+                         std::string_view lowerNeedle,
+                         std::string& scratch) {
+    if (lowerNeedle.empty()) {
         return true;
     }
-    std::string lowerHaystack = ToLowerUtf8(haystack);
-    std::string lowerNeedle = ToLowerUtf8(needle);
-    return lowerHaystack.find(lowerNeedle) != std::string::npos;
+    ToLowerUtf8Into(haystack, scratch);
+    return scratch.find(lowerNeedle) != std::string::npos;
 }
 
 void EnsureValidSelectionForFilter(AppState& state) {
@@ -123,12 +124,29 @@ bool AppState::IsTaskAssignedAsChecker(
 std::vector<const aquarium::api::Task*> AppState::GetFilteredTasks() const {
     std::vector<const aquarium::api::Task*> result;
     result.reserve(tasks.size());
-    std::unordered_set<std::int64_t> seenIds;
 
-    std::string trimmedQuery = Trim(filter.searchQuery);
+    constexpr std::size_t kLinearDedupThreshold = 64;
+    std::unordered_set<std::int64_t> seenIds;
+    if (tasks.size() > kLinearDedupThreshold) {
+        seenIds.reserve(tasks.size());
+    }
+
+    const std::string_view trimmedQuery = Trim(filter.searchQuery);
+    std::string lowerNeedle;
+    std::string lowerScratch;
+    if (!trimmedQuery.empty()) {
+        ToLowerUtf8Into(trimmedQuery, lowerNeedle);
+    }
 
     for (const auto& task : tasks) {
-        if (!seenIds.insert(task.id()).second) {
+        const auto id = task.id();
+        if (tasks.size() <= kLinearDedupThreshold) {
+            if (std::ranges::any_of(result, [id](const auto* existing) {
+                    return existing->id() == id;
+                })) {
+                continue;
+            }
+        } else if (!seenIds.insert(id).second) {
             continue;
         }
 
@@ -151,13 +169,21 @@ std::vector<const aquarium::api::Task*> AppState::GetFilteredTasks() const {
             }
         }
 
-        if (!trimmedQuery.empty()) {
-            std::string idStr = std::to_string(task.id());
-            bool matchTitle =
-                ContainsCaseInsensitive(task.title(), trimmedQuery);
-            bool matchId = ContainsCaseInsensitive(idStr, trimmedQuery);
-            bool matchDesc =
-                ContainsCaseInsensitive(task.description(), trimmedQuery);
+        if (!lowerNeedle.empty()) {
+            std::array<char, 24> idBuf{};
+            auto [idEnd, ec] =
+                std::to_chars(idBuf.data(), idBuf.data() + idBuf.size(), id);
+            const std::string_view idView(
+                idBuf.data(), static_cast<std::size_t>(idEnd - idBuf.data()));
+            const bool matchId =
+                idView.find(lowerNeedle) != std::string_view::npos;
+            const bool matchTitle =
+                !matchId &&
+                ContainsLowerNeedle(task.title(), lowerNeedle, lowerScratch);
+            const bool matchDesc =
+                !matchId && !matchTitle &&
+                ContainsLowerNeedle(task.description(), lowerNeedle,
+                                    lowerScratch);
             if (!matchTitle && !matchId && !matchDesc) {
                 continue;
             }
@@ -231,7 +257,9 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
                 state.isLoadingTasks = a.loading;
             } else if constexpr (std::is_same_v<T, TasksLoadedAction>) {
                 state.tasks.clear();
+                state.tasks.reserve(a.tasks.size());
                 std::unordered_set<std::int64_t> seenIds;
+                seenIds.reserve(a.tasks.size());
                 for (const auto& t : a.tasks) {
                     if (seenIds.insert(t.id()).second) {
                         state.tasks.push_back(t);
@@ -263,7 +291,9 @@ AppState Reducer::Reduce(AppState state, const Action& action) {
                 if (state.selectedTaskId.has_value() &&
                     *state.selectedTaskId == a.taskId) {
                     state.activeComments.clear();
+                    state.activeComments.reserve(a.comments.size());
                     std::unordered_set<std::int64_t> seenIds;
+                    seenIds.reserve(a.comments.size());
                     for (const auto& c : a.comments) {
                         if (seenIds.insert(c.id()).second) {
                             state.activeComments.push_back(c);

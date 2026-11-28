@@ -325,14 +325,14 @@ TEST_F(BackendClientTest, HealthRpc) {
 
 TEST_F(BackendClientTest, UserStoreOperationsAndAuthHeader) {
     // 1. GetAllUsers with valid token
-    auto usersResult = _client->GetAllUsers();
+    auto usersResult = _client->GetAllUsers().Get();
     ASSERT_TRUE(usersResult.HasValue());
     EXPECT_EQ(usersResult.Value().size(), 2);
     EXPECT_EQ(usersResult.Value()[0].name(), "alice");
 
     // 2. GetAllUsers with bad token returns UNAUTHENTICATED
     _client->SetAuthToken("wrong_token");
-    auto failUsers = _client->GetAllUsers();
+    auto failUsers = _client->GetAllUsers().Get();
     EXPECT_FALSE(failUsers.HasValue());
     EXPECT_TRUE(failUsers.Error().IsAuthError());
     _client->SetAuthToken("valid_token");
@@ -437,7 +437,7 @@ TEST_F(BackendClientTest, PeriodicHealthCheckerLifecycle) {
     std::atomic<int> healthCheckCount{0};
     std::atomic<bool> lastServingState{false};
 
-    HealthChecker checker(_client, std::chrono::milliseconds(50),
+    HealthChecker checker(*_client, std::chrono::milliseconds(50),
                           [&](const Result<HealthResponse>& res) {
                               healthCheckCount++;
                               if (res.HasValue() &&
@@ -464,7 +464,7 @@ TEST_F(BackendClientTest, EventSubscriberReceivesLiveEvents) {
     std::atomic<bool> receivedEvent{false};
     std::atomic<int64_t> receivedTaskId{0};
 
-    EventSubscriber subscriber(_client, [&](const TaskEvent& event) {
+    EventSubscriber subscriber(*_client, [&](const TaskEvent& event) {
         if (event.type() == TaskEvent::TASK_CREATED) {
             receivedTaskId = event.taskid();
             receivedEvent = true;

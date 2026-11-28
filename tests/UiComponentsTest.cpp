@@ -1,4 +1,5 @@
 #include "Common/TimeUtils.hpp"
+#include "Grpc/BackendClient.hpp"
 #include "State/AppState.hpp"
 #include "State/Reducer.hpp"
 #include "UI/Components/RemarksPane.hpp"
@@ -16,6 +17,7 @@
 #include <ftxui/component/event.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <gtest/gtest.h>
+#include <memory>
 #include <string>
 
 namespace Aquarium::UI::Tests {
@@ -326,7 +328,8 @@ TEST(UiComponentsTest, TaskBoardViewRendersThreeColumns) {
         }
     };
 
-    auto comp = Views::CreateTaskBoardView(state, dispatch, nullptr);
+    Grpc::BackendClient offlineClient(std::shared_ptr<grpc::ChannelInterface>{});
+    auto comp = Views::CreateTaskBoardView(state, dispatch, offlineClient);
     auto elem = comp->Render();
     auto screen = Screen::Create(Dimension::Fixed(160), Dimension::Fixed(25));
     Render(screen, elem);
@@ -397,8 +400,9 @@ TEST(UiComponentsTest, ReviewViewRendersInReviewTasksAndActions) {
     state.tasks = {t1, t2};
     state.selectedTaskId = 2;
 
+    Grpc::BackendClient offlineClient(std::shared_ptr<grpc::ChannelInterface>{});
     auto comp =
-        Views::CreateReviewView(state, [](const State::Action&) {}, nullptr);
+        Views::CreateReviewView(state, [](const State::Action&) {}, offlineClient);
     auto elem = comp->Render();
     auto screen = Screen::Create(Dimension::Fixed(160), Dimension::Fixed(25));
     Render(screen, elem);
@@ -428,7 +432,8 @@ TEST(UiComponentsTest, CreateTaskViewRendersFormAndHandlesValidation) {
         }
     };
 
-    auto comp = Views::CreateCreateTaskView(state, dispatch, nullptr);
+    Grpc::BackendClient offlineClient(std::shared_ptr<grpc::ChannelInterface>{});
+    auto comp = Views::CreateCreateTaskView(state, dispatch, offlineClient);
     auto elem = comp->Render();
     auto screen = Screen::Create(Dimension::Fixed(100), Dimension::Fixed(30));
     Render(screen, elem);
@@ -455,8 +460,9 @@ TEST(UiComponentsTest, CreateTaskViewDynamicSessionAndAuthValidation) {
     AppState state;
     state.session.userId = 0; // Unauthenticated at startup
 
+    Grpc::BackendClient offlineClient(std::shared_ptr<grpc::ChannelInterface>{});
     auto comp = Views::CreateCreateTaskView(
-        state, [](const State::Action&) {}, nullptr);
+        state, [](const State::Action&) {}, offlineClient);
 
     // Type a title
     for (char c : std::string("Task Alpha")) {
@@ -538,7 +544,8 @@ TEST(UiComponentsTest, TaskBoardViewSearchQueryInputAndBackspaceRestoresTasks) {
         state = State::Reducer::Reduce(state, a);
     };
 
-    auto comp = Views::CreateTaskBoardView(state, dispatch, nullptr);
+    Grpc::BackendClient offlineClient(std::shared_ptr<grpc::ChannelInterface>{});
+    auto comp = Views::CreateTaskBoardView(state, dispatch, offlineClient);
 
     // Initial render: both tasks visible
     auto screen = Screen::Create(Dimension::Fixed(160), Dimension::Fixed(25));
@@ -712,7 +719,8 @@ TEST(UiComponentsTest, TaskBoardViewScopeToggleSwitchesAllAndMyTasks) {
         state = State::Reducer::Reduce(state, a);
     };
 
-    auto comp = Views::CreateTaskBoardView(state, dispatch, nullptr);
+    Grpc::BackendClient offlineClient(std::shared_ptr<grpc::ChannelInterface>{});
+    auto comp = Views::CreateTaskBoardView(state, dispatch, offlineClient);
     auto screen = Screen::Create(Dimension::Fixed(160), Dimension::Fixed(25));
     Render(screen, comp->Render());
     std::string rendered = screen.ToString();
@@ -769,7 +777,8 @@ TEST(UiComponentsTest, ReviewViewScopeToggleFiltersByCurrentUser) {
         state = State::Reducer::Reduce(state, a);
     };
 
-    auto comp = Views::CreateReviewView(state, dispatch, nullptr);
+    Grpc::BackendClient offlineClient(std::shared_ptr<grpc::ChannelInterface>{});
+    auto comp = Views::CreateReviewView(state, dispatch, offlineClient);
     auto screen = Screen::Create(Dimension::Fixed(160), Dimension::Fixed(25));
     Render(screen, comp->Render());
     std::string rendered = screen.ToString();

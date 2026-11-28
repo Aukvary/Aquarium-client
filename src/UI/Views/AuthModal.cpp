@@ -11,50 +11,58 @@ namespace Aquarium::UI::Views {
 
 using namespace ftxui;
 
+namespace {
+
+struct AuthModalState {
+    std::string server;
+    std::string name;
+    std::string inviteKey;
+    std::string error;
+};
+
+} // namespace
+
 Component CreateAuthModal(const State::AppState& state,
                           AuthModalCallbacks callbacks) {
-    auto serverModel = std::make_shared<std::string>(
-        state.session.serverHost.empty() ? "localhost:50051"
-                                         : state.session.serverHost);
-    auto nameModel = std::make_shared<std::string>();
-    auto inviteKeyModel = std::make_shared<std::string>();
-    auto errorModel = std::make_shared<std::string>();
+    auto form = std::make_shared<AuthModalState>();
+    form->server = state.session.serverHost.empty() ? "localhost:50051"
+                                                    : state.session.serverHost;
 
     InputOption inputOpt;
     inputOpt.multiline = false;
 
-    auto serverInput = Input(serverModel.get(), "localhost:50051", inputOpt);
-    auto nameInput = Input(nameModel.get(), "Your username", inputOpt);
+    auto serverInput = Input(&form->server, "localhost:50051", inputOpt);
+    auto nameInput = Input(&form->name, "Your username", inputOpt);
 
     InputOption secretOpt = inputOpt;
     secretOpt.password = true;
-    auto inviteInput =
-        Input(inviteKeyModel.get(), "Secret invite key", secretOpt);
+    auto inviteInput = Input(&form->inviteKey, "Secret invite key", secretOpt);
 
-    auto trySubmit = [callbacks, serverModel, nameModel, inviteKeyModel,
-                      errorModel] {
-        if (serverModel->empty()) {
-            *errorModel = "Server address cannot be empty.";
+    auto cb = std::make_shared<AuthModalCallbacks>(std::move(callbacks));
+
+    auto trySubmit = [cb, form] {
+        if (form->server.empty()) {
+            form->error = "Server address cannot be empty.";
             return;
         }
-        if (nameModel->empty()) {
-            *errorModel = "Username cannot be empty.";
+        if (form->name.empty()) {
+            form->error = "Username cannot be empty.";
             return;
         }
-        if (inviteKeyModel->empty()) {
-            *errorModel = "Invite key cannot be empty.";
+        if (form->inviteKey.empty()) {
+            form->error = "Invite key cannot be empty.";
             return;
         }
-        errorModel->clear();
-        if (callbacks.onSubmit) {
-            callbacks.onSubmit(*serverModel, *nameModel, *inviteKeyModel);
+        form->error.clear();
+        if (cb->onSubmit) {
+            cb->onSubmit(form->server, form->name, form->inviteKey);
         }
     };
 
     auto btnSubmit = Button("Register & Connect", trySubmit);
-    auto btnCancel = Button("Cancel", [callbacks] {
-        if (callbacks.onCancel) {
-            callbacks.onCancel();
+    auto btnCancel = Button("Cancel", [cb] {
+        if (cb->onCancel) {
+            cb->onCancel();
         }
     });
 
@@ -66,7 +74,7 @@ Component CreateAuthModal(const State::AppState& state,
     });
 
     auto renderer = Renderer(container, [serverInput, nameInput, inviteInput,
-                                         btnSubmit, btnCancel, errorModel] {
+                                         btnSubmit, btnCancel, form] {
         Elements formRows = {
             text("REGISTRATION / LOGIN") | bold | color(Color::CyanLight) |
                 center,
@@ -87,9 +95,9 @@ Component CreateAuthModal(const State::AppState& state,
             }),
         };
 
-        if (!errorModel->empty()) {
+        if (!form->error.empty()) {
             formRows.push_back(separator());
-            formRows.push_back(text(*errorModel) | color(Color::RedLight) |
+            formRows.push_back(text(form->error) | color(Color::RedLight) |
                                bold | center);
         }
 
@@ -106,14 +114,14 @@ Component CreateAuthModal(const State::AppState& state,
                clear_under;
     });
 
-    return CatchEvent(renderer, [trySubmit, callbacks](Event event) {
+    return CatchEvent(renderer, [trySubmit, cb](Event event) {
         if (event == Event::Return) {
             trySubmit();
             return true;
         }
         if (event == Event::Escape) {
-            if (callbacks.onCancel) {
-                callbacks.onCancel();
+            if (cb->onCancel) {
+                cb->onCancel();
             }
             return true;
         }

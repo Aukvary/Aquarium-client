@@ -24,61 +24,73 @@ namespace {
 
 std::vector<const Task*> GetReviewTasks(const State::AppState& state) {
     std::vector<const Task*> result;
+    result.reserve(state.tasks.size());
+    constexpr std::size_t kLinearDedupThreshold = 64;
     std::unordered_set<std::int64_t> seenIds;
+    if (state.tasks.size() > kLinearDedupThreshold) {
+        seenIds.reserve(state.tasks.size());
+    }
     for (const auto& task : state.tasks) {
         if (task.status() != TaskStatus::IN_REVIEW) {
             continue;
         }
-        if (state.filter.onlyMyTasks &&
-            !state.IsTaskAssignedAsChecker(task)) {
+        if (state.filter.onlyMyTasks && !state.IsTaskAssignedAsChecker(task)) {
             continue;
         }
-        if (seenIds.insert(task.id()).second) {
-            result.push_back(&task);
+        const auto id = task.id();
+        if (state.tasks.size() <= kLinearDedupThreshold) {
+            if (std::ranges::any_of(result, [id](const auto* existing) {
+                    return existing->id() == id;
+                })) {
+                continue;
+            }
+        } else if (!seenIds.insert(id).second) {
+            continue;
         }
+        result.push_back(&task);
     }
     return result;
 }
+
+struct ReviewFormState {
+    std::string revisionReason;
+    std::string reasonError;
+};
 
 } // namespace
 
 Component CreateReviewView(const State::AppState& state,
                            std::function<void(const State::Action&)> dispatch,
-                           std::shared_ptr<Grpc::BackendClient> client) {
-    auto selectTaskAndFetchComments = [dispatch, client](std::int64_t taskId) {
+                           Grpc::BackendClient& client) {
+    auto selectTaskAndFetchComments = [dispatch, &client](std::int64_t taskId) {
         dispatch(State::SelectTaskAction{taskId});
-        if (client) {
-            auto commentsRes = client->GetComments(taskId);
-            if (commentsRes.HasValue()) {
-                dispatch(State::CommentsLoadedAction{
-                    .taskId = taskId,
-                    .comments = commentsRes.Value(),
-                });
-            }
+        auto commentsRes = client.GetComments(taskId);
+        if (commentsRes.HasValue()) {
+            dispatch(State::CommentsLoadedAction{
+                .taskId = taskId,
+                .comments = commentsRes.Value(),
+            });
         }
     };
 
-    // Center Details Pane (display-only or with standard actions)
     auto detailsPane = Components::CreateTaskDetailsPane(state);
 
-    // Review Actions (Approve & Reject with Reason)
-    auto revisionReasonModel = std::make_shared<std::string>();
-    auto reasonErrorModel = std::make_shared<std::string>();
+    auto formState = std::make_shared<ReviewFormState>();
 
     InputOption reasonOpt;
     reasonOpt.multiline = false;
     auto reasonInput =
-        Input(revisionReasonModel.get(), "Revision reason...", reasonOpt);
+        Input(&formState->revisionReason, "Revision reason...", reasonOpt);
 
     auto btnApprove = Button(
         "✓ Approve & Verify",
-        [&state, dispatch, client] {
+        [&state, dispatch, &client] {
             auto task = state.GetSelectedTask();
-            if (task == nullptr || !client) {
+            if (task == nullptr) {
                 return;
             }
             auto taskId = task->id();
-            auto res = client->UpdateTaskStatus(taskId, TaskStatus::VERIFIED);
+            auto res = client.UpdateTaskStatus(taskId, TaskStatus::VERIFIED);
             if (res.HasValue()) {
                 dispatch(State::TaskStatusChangedAction{
                     .taskId = taskId,
@@ -100,22 +112,22 @@ Component CreateReviewView(const State::AppState& state,
 
     auto btnReject = Button(
         "✗ Reject with Reason",
-        [&state, dispatch, client, revisionReasonModel, reasonErrorModel] {
+        [&state, dispatch, &client, formState] {
             auto task = state.GetSelectedTask();
-            if (task == nullptr || !client) {
+            if (task == nullptr) {
                 return;
             }
-            if (revisionReasonModel->empty()) {
-                *reasonErrorModel = "Revision reason is mandatory.";
+            if (formState->revisionReason.empty()) {
+                formState->reasonError = "Revision reason is mandatory.";
                 dispatch(State::ShowToastAction{
                     .message = "Cannot reject: revision reason is required.",
                     .severity = State::ToastSeverity::Warning,
                 });
                 return;
             }
-            reasonErrorModel->clear();
+            formState->reasonError.clear();
             auto taskId = task->id();
-            auto res = client->RejectTask(taskId, *revisionReasonModel);
+            auto res = client.RejectTask(taskId, formState->revisionReason);
             if (res.HasValue()) {
                 dispatch(State::TaskRejectedAction{
                     .task = res.Value().task(),
@@ -126,7 +138,7 @@ Component CreateReviewView(const State::AppState& state,
                                " returned to ACTIVE with revision remarks.",
                     .severity = State::ToastSeverity::Warning,
                 });
-                revisionReasonModel->clear();
+                formState->revisionReason.clear();
             } else {
                 dispatch(State::ShowToastAction{
                     .message = "Failed to reject: " + res.Error().message,
@@ -139,12 +151,9 @@ Component CreateReviewView(const State::AppState& state,
     // Remarks pane for comment history & discussion
     Components::RemarksCallbacks remarksCallbacks{
         .onAddComment =
-            [&state, dispatch, client](std::int64_t taskId,
-                                       const std::string& content) {
-                if (!client) {
-                    return;
-                }
-                auto res = client->AddComment(
+            [&state, dispatch, &client](std::int64_t taskId,
+                                        const std::string& content) {
+                auto res = client.AddComment(
                     taskId, content,
                     aquarium::api::CommentType::COMMENT_GENERAL,
                     state.session.userId > 0
@@ -175,7 +184,7 @@ Component CreateReviewView(const State::AppState& state,
 
     auto reviewActionsRenderer =
         Renderer(reviewActionsContainer, [btnApprove, reasonInput, btnReject,
-                                          reasonErrorModel] {
+                                          formState] {
             Elements rows = {
                 text("REVIEW ACTIONS") | bold | color(Color::CyanLight) |
                     center,
@@ -190,8 +199,8 @@ Component CreateReviewView(const State::AppState& state,
                 reasonInput->Render() | borderLight,
             };
 
-            if (!reasonErrorModel->empty()) {
-                rows.push_back(text(*reasonErrorModel) |
+            if (!formState->reasonError.empty()) {
+                rows.push_back(text(formState->reasonError) |
                                color(Color::RedLight) | bold);
             }
 
@@ -229,6 +238,7 @@ Component CreateReviewView(const State::AppState& state,
             taskRows.push_back(text("No tasks awaiting review.") | dim |
                                center);
         } else {
+            taskRows.reserve(currentReviewTasks.size());
             for (const auto* task : currentReviewTasks) {
                 bool isSelected = state.selectedTaskId.has_value() &&
                                   *state.selectedTaskId == task->id();

@@ -1,9 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <nlohmann/json.hpp>
 #include <optional>
-#include <span>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -34,7 +35,9 @@ struct ClientConfig {
     std::unordered_map<std::string, ServerEntry> servers;
 
     [[nodiscard]] std::optional<ServerEntry> GetActiveSession() const;
-    void SetActiveSession(const std::string& server, const ServerEntry& entry);
+    void SetActiveSession(const char* server, const ServerEntry& entry);
+    void SetActiveSession(std::string_view server, const ServerEntry& entry);
+    void SetActiveSession(std::string&& server, const ServerEntry& entry);
 
     bool operator==(const ClientConfig& other) const = default;
 };
@@ -43,9 +46,8 @@ void to_json(nlohmann::json& j, const ClientConfig& config);
 void from_json(const nlohmann::json& j, ClientConfig& config);
 
 struct CliOverrides {
-    std::optional<std::string> server;
-    std::optional<std::string> token;
-    bool smokeTest{false};
+    std::optional<std::string_view> server;
+    std::optional<std::string_view> token;
     bool showHelp{false};
 };
 
@@ -60,10 +62,30 @@ public:
         std::filesystem::path configPath = GetDefaultConfigPath());
 
     [[nodiscard]] static std::filesystem::path GetDefaultConfigPath();
-    [[nodiscard]] static CliOverrides
-    ParseCommandLine(std::span<const std::string_view> args);
-    [[nodiscard]] static CliOverrides
-    ParseCommandLine(int argc, std::span<const std::string_view> argv);
+    template <std::ranges::input_range Range>
+        requires std::convertible_to<std::ranges::range_reference_t<Range>,
+                                     std::string_view>
+    [[nodiscard]] static CliOverrides ParseCommandLine(Range&& args) {
+        CliOverrides overrides;
+        for (auto it = std::ranges::begin(args); it != std::ranges::end(args);
+             ++it) {
+            std::string_view arg = *it;
+            if (arg == "--server" || arg == "-s") {
+                if (++it == std::ranges::end(args)) {
+                    break;
+                }
+                overrides.server = *it;
+            } else if (arg == "--token" || arg == "-t") {
+                if (++it == std::ranges::end(args)) {
+                    break;
+                }
+                overrides.token = *it;
+            } else if (arg == "--help" || arg == "-h") {
+                overrides.showHelp = true;
+            }
+        }
+        return overrides;
+    }
 
     bool Load();
     bool Save();

@@ -49,7 +49,7 @@ struct ToastMessage {
 };
 
 struct SessionState {
-    std::string serverHost{"localhost:50051"};
+    std::string serverHost;
     std::int64_t userId{0};
     std::string userName;
     std::string authToken;

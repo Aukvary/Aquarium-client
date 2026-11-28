@@ -1,6 +1,8 @@
 #pragma once
 
+#include <coroutine>
 #include <cstdint>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -8,7 +10,6 @@
 #include <variant>
 
 namespace Aquarium::Common {
-
 using TaskId = std::int64_t;
 using UserId = std::int64_t;
 
@@ -141,4 +142,107 @@ public:
     }
 };
 
+template <typename T>
+class Task {
+private:
+    struct Promise {
+        std::optional<T> value;
+        std::coroutine_handle<> continuation;
+
+        Task get_return_object() noexcept {
+            return Task{std::coroutine_handle<Promise>::from_promise(*this)};
+        }
+
+        std::suspend_always initial_suspend() noexcept {
+            return {};
+        }
+
+        auto final_suspend() noexcept {
+            struct FinalAwaiter {
+                [[nodiscard]] bool await_ready() const noexcept {
+                    return false;
+                }
+
+                std::coroutine_handle<>
+                await_suspend(std::coroutine_handle<Promise> h) noexcept {
+                    return h.promise().continuation ? h.promise().continuation
+                                                    : std::noop_coroutine();
+                }
+
+                void await_resume() noexcept {}
+            };
+
+            return FinalAwaiter{};
+        }
+
+        void return_value(T v) {
+            value.emplace(std::move(v));
+        }
+
+        void unhandled_exception() {
+            std::terminate();
+        }
+    };
+
+    std::coroutine_handle<Promise> _handle;
+
+public:
+    using promise_type = Promise;
+
+    explicit Task(std::coroutine_handle<Promise> h) noexcept : _handle(h) {}
+    Task(Task&& other) noexcept
+        : _handle(std::exchange(other._handle, nullptr)) {}
+    ~Task() {
+        if (_handle) {
+            _handle.destroy();
+        }
+    }
+
+    Task(const Task&) = delete;
+    Task& operator=(const Task&) = delete;
+    Task& operator=(Task&&) = delete;
+
+    [[nodiscard]] bool await_ready() const noexcept {
+        return false;
+    }
+
+    std::coroutine_handle<>
+    await_suspend(std::coroutine_handle<> caller) noexcept {
+        _handle.promise().continuation = caller;
+        return _handle;
+    }
+
+    T await_resume() {
+        return std::move(*_handle.promise().value);
+    }
+
+    [[nodiscard]] T Get() {
+        if (!_handle.done()) {
+            _handle.resume();
+        }
+        return std::move(*_handle.promise().value);
+    }
+};
+
+struct DetachedTask {
+    struct promise_type {
+        DetachedTask get_return_object() noexcept {
+            return {};
+        }
+
+        std::suspend_never initial_suspend() noexcept {
+            return {};
+        }
+
+        std::suspend_never final_suspend() noexcept {
+            return {};
+        }
+
+        void return_void() noexcept {}
+
+        void unhandled_exception() noexcept {
+            std::terminate();
+        }
+    };
+};
 } // namespace Aquarium::Common

@@ -3,12 +3,13 @@
 #include "Common/TimeUtils.hpp"
 #include "UI/UIHelpers.hpp"
 
+#include <charconv>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <memory>
-#include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -18,111 +19,139 @@ using namespace ftxui;
 using aquarium::api::CreateTaskRequest;
 using aquarium::api::TaskStatus;
 
+namespace {
+
+struct CreateTaskFormState {
+    std::string title;
+    std::string description;
+    std::string workers;
+    std::string checker;
+    std::string dueDate;
+    TaskStatus status{TaskStatus::PLAN};
+    std::string error;
+};
+
+std::string_view TrimAscii(std::string_view sv) noexcept {
+    const auto first = sv.find_first_not_of(" \t\n\r\f\v");
+    if (first == std::string_view::npos) {
+        return {};
+    }
+    const auto last = sv.find_last_not_of(" \t\n\r\f\v");
+    return sv.substr(first, last - first + 1);
+}
+
+bool ParseInt64Exact(std::string_view sv, std::int64_t& out) noexcept {
+    sv = TrimAscii(sv);
+    if (sv.empty()) {
+        return false;
+    }
+    const char* begin = sv.data();
+    const char* end = sv.data() + sv.size();
+    auto [ptr, ec] = std::from_chars(begin, end, out);
+    return ec == std::errc{} && ptr == end;
+}
+
+} // namespace
+
 Component
 CreateCreateTaskView(const State::AppState& state,
                      std::function<void(const State::Action&)> dispatch,
-                     std::shared_ptr<Grpc::BackendClient> client) {
-    auto titleModel = std::make_shared<std::string>();
-    auto descModel = std::make_shared<std::string>();
-    auto workersModel = std::make_shared<std::string>();
-    auto checkerModel = std::make_shared<std::string>();
-    auto dueDateModel = std::make_shared<std::string>();
-    auto statusModel = std::make_shared<TaskStatus>(TaskStatus::PLAN);
-    auto errorModel = std::make_shared<std::string>();
+                     Grpc::BackendClient& client) {
+    auto form = std::make_shared<CreateTaskFormState>();
 
     InputOption singleOpt;
     singleOpt.multiline = false;
 
-    auto titleInput = Input(titleModel.get(), "Enter task title...", singleOpt);
+    auto titleInput = Input(&form->title, "Enter task title...", singleOpt);
     auto descInput =
-        Input(descModel.get(), "Enter detailed description...", singleOpt);
+        Input(&form->description, "Enter detailed description...", singleOpt);
     auto workersInput =
-        Input(workersModel.get(), "e.g. 1, 2 (optional)", singleOpt);
-    auto checkerInput =
-        Input(checkerModel.get(), "e.g. 2 (optional)", singleOpt);
+        Input(&form->workers, "e.g. 1, 2 (optional)", singleOpt);
+    auto checkerInput = Input(&form->checker, "e.g. 2 (optional)", singleOpt);
     auto dueDateInput =
-        Input(dueDateModel.get(), "YYYY-MM-DD (optional)", singleOpt);
+        Input(&form->dueDate, "YYYY-MM-DD (optional)", singleOpt);
 
-    auto btnToggleStatus = Button("Toggle Status", [statusModel] {
-        if (*statusModel == TaskStatus::PLAN) {
-            *statusModel = TaskStatus::ACTIVE;
+    auto btnToggleStatus = Button("Toggle Status", [form] {
+        if (form->status == TaskStatus::PLAN) {
+            form->status = TaskStatus::ACTIVE;
         } else {
-            *statusModel = TaskStatus::PLAN;
+            form->status = TaskStatus::PLAN;
         }
     });
 
-    auto submitForm = [&state, dispatch, client, titleModel, descModel,
-                       workersModel, checkerModel, dueDateModel, statusModel,
-                       errorModel] {
-        if (titleModel->empty()) {
-            *errorModel = "Task title cannot be empty.";
+    auto submitForm = [&state, dispatch, &client, form] {
+        if (form->title.empty()) {
+            form->error = "Task title cannot be empty.";
             return;
         }
 
         if (state.session.userId <= 0) {
-            *errorModel =
+            form->error =
                 "Cannot create task: unauthenticated user. Please log in.";
             return;
         }
 
         CreateTaskRequest req;
-        req.set_title(*titleModel);
-        req.set_description(*descModel);
+        req.set_title(form->title);
+        req.set_description(form->description);
         req.set_authorid(state.session.userId);
-        req.set_status(*statusModel);
+        req.set_status(form->status);
 
         // Parse workers (comma-separated list of IDs)
-        if (!workersModel->empty()) {
-            std::istringstream ss(*workersModel);
-            std::string token;
-            while (std::getline(ss, token, ',')) {
-                token.erase(
-                    0, token.find_first_not_of(" \t\n\r\f\v")); // trim left
-                auto last = token.find_last_not_of(" \t\n\r\f\v");
-                if (last != std::string::npos) {
-                    token.erase(last + 1); // trim right
-                }
+        if (!form->workers.empty()) {
+            std::string_view remaining(form->workers);
+            while (!remaining.empty()) {
+                const auto commaPos = remaining.find(',');
+                const std::string_view rawToken =
+                    commaPos == std::string_view::npos
+                        ? remaining
+                        : remaining.substr(0, commaPos);
+                const std::string_view token = TrimAscii(rawToken);
                 if (!token.empty()) {
-                    try {
-                        auto wid = std::stoll(token);
-                        req.add_workerids(wid);
-                    } catch (...) {
-                        *errorModel = "Invalid worker ID: '" + token + "'";
+                    std::int64_t wid = 0;
+                    if (!ParseInt64Exact(token, wid)) {
+                        form->error = "Invalid worker ID: '";
+                        form->error += token;
+                        form->error += "'";
                         return;
                     }
+                    req.add_workerids(wid);
                 }
+                if (commaPos == std::string_view::npos) {
+                    break;
+                }
+                remaining.remove_prefix(commaPos + 1);
             }
         }
 
         // Parse checker
-        if (!checkerModel->empty()) {
-            try {
-                auto cid = std::stoll(*checkerModel);
-                req.set_checkerid(cid);
-            } catch (...) {
-                *errorModel = "Invalid checker ID: '" + *checkerModel + "'";
+        if (!form->checker.empty()) {
+            std::int64_t cid = 0;
+            if (!ParseInt64Exact(form->checker, cid)) {
+                form->error = "Invalid checker ID: '" + form->checker + "'";
                 return;
             }
+            req.set_checkerid(cid);
         }
 
         // Parse due date
-        if (!dueDateModel->empty()) {
-            auto tsOpt = Common::ParseDate(*dueDateModel);
+        if (!form->dueDate.empty()) {
+            auto tsOpt = Common::ParseDate(form->dueDate);
             if (!tsOpt.has_value()) {
-                *errorModel = "Invalid date format. Expected YYYY-MM-DD.";
+                form->error = "Invalid date format. Expected YYYY-MM-DD.";
                 return;
             }
             *req.mutable_duedate() = *tsOpt;
         }
 
-        errorModel->clear();
+        form->error.clear();
 
-        if (!client) {
-            *errorModel = "Cannot create task: offline or client missing.";
+        if (!client.HasChannel()) {
+            form->error = "Cannot create task: offline or client missing.";
             return;
         }
 
-        auto res = client->CreateTask(req);
+        auto res = client.CreateTask(req);
         if (res.HasValue()) {
             auto created = res.Value();
             dispatch(State::TaskCreatedAction{created});
@@ -134,7 +163,7 @@ CreateCreateTaskView(const State::AppState& state,
             });
             dispatch(State::NavigateToViewAction{State::ViewType::Tasks});
         } else {
-            *errorModel = res.Error().message;
+            form->error = res.Error().message;
             dispatch(State::ShowToastAction{
                 .message = "Task creation failed: " + res.Error().message,
                 .severity = State::ToastSeverity::Error,
@@ -160,13 +189,13 @@ CreateCreateTaskView(const State::AppState& state,
     auto renderer = Renderer(formContainer, [&state, titleInput, descInput,
                                              workersInput, checkerInput,
                                              btnToggleStatus, dueDateInput,
-                                             btnSubmit, btnCancel, statusModel,
-                                             errorModel] {
+                                             btnSubmit, btnCancel, form] {
         // Build available users summary
         std::string usersSummary = "Available Team Members: ";
         if (state.users.empty()) {
             usersSummary += "None";
         } else {
+            usersSummary.reserve(usersSummary.size() + state.users.size() * 16);
             for (size_t i = 0; i < state.users.size(); ++i) {
                 if (i > 0) {
                     usersSummary += ", ";
@@ -202,7 +231,7 @@ CreateCreateTaskView(const State::AppState& state,
             separator(),
             hbox({
                 text("Status:      ") | bold,
-                RenderStatusBadge(*statusModel),
+                RenderStatusBadge(form->status),
                 text("  "),
                 btnToggleStatus->Render(),
             }),
@@ -213,9 +242,9 @@ CreateCreateTaskView(const State::AppState& state,
             }),
         };
 
-        if (!errorModel->empty()) {
+        if (!form->error.empty()) {
             rows.push_back(separator());
-            rows.push_back(text(*errorModel) | color(Color::RedLight) | bold |
+            rows.push_back(text(form->error) | color(Color::RedLight) | bold |
                            center);
         }
 

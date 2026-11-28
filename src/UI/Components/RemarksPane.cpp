@@ -143,6 +143,7 @@ public:
                                       dim | center);
         } else {
             std::unordered_set<std::int64_t> seenCommentIds;
+            seenCommentIds.reserve(_state.activeComments.size());
             commentElements.reserve(_state.activeComments.size());
             // Display newest remarks at the top.
             for (auto it = _state.activeComments.rbegin();

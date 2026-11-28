@@ -1,7 +1,10 @@
-#include "MainScreen.hpp"
+#include "./MainScreen.hpp"
 
+#include "./NavigationSidebar.hpp"
+#include "Common/Types.hpp"
 #include "Components/StatusBar.hpp"
-#include "NavigationSidebar.hpp"
+#include "Grpc/HealthChecker.hpp"
+#include "State/AppState.hpp"
 #include "State/Reducer.hpp"
 #include "UI/UIHelpers.hpp"
 #include "Views/AuthModal.hpp"
@@ -14,6 +17,7 @@
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/terminal.hpp>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -29,6 +33,12 @@ using State::ViewType;
 namespace {
 
 class GlobalEventFilter : public ComponentBase {
+private:
+    std::function<void()> _onQuit;
+    std::function<void()> _onProjectSwitch;
+    std::function<void(ViewType)> _onNavigate;
+    std::function<void()> _onEscape;
+
 public:
     GlobalEventFilter(Component child,
                       std::function<void()> onQuit,
@@ -51,12 +61,10 @@ public:
             return true;
         }
 
-        // Let active child (e.g. Input, Button) process event first
         if (ComponentBase::OnEvent(event)) {
             return true;
         }
 
-        // Child did not consume event: check global hotkeys
         if (event == Event::Character('q')) {
             _onQuit();
             return true;
@@ -79,52 +87,49 @@ public:
         }
         return false;
     }
-
-private:
-    std::function<void()> _onQuit;
-    std::function<void()> _onProjectSwitch;
-    std::function<void(ViewType)> _onNavigate;
-    std::function<void()> _onEscape;
 };
 
 } // namespace
 
-MainScreen::MainScreen(std::shared_ptr<Config::ConfigManager> configManager,
-                       std::shared_ptr<Grpc::BackendClient> backendClient)
-    : _configManager(std::move(configManager)),
-      _backendClient(std::move(backendClient)),
+MainScreen::MainScreen(Config::ConfigManager& configManager)
+    : _configManager(configManager),
+      _backendClient(configManager.GetActiveServer(),
+                     configManager.GetActiveToken()),
       _screen(ScreenInteractive::Fullscreen()) {
     InitState();
 }
 
 MainScreen::~MainScreen() {
-    if (_actionThread.joinable()) {
-        _actionThread.request_stop();
-        _actionThread.join();
-    }
     if (_healthChecker) {
         _healthChecker->Stop();
     }
     if (_eventSubscriber) {
         _eventSubscriber->Stop();
     }
+    if (_actionThread.joinable()) {
+        _actionThread.request_stop();
+        _actionThread.join();
+    }
+    if (_fetchThread.joinable()) {
+        _fetchThread.request_stop();
+        _fetchThread.join();
+    }
 }
 
 void MainScreen::InitState() {
-    if (_configManager) {
-        _state.session.serverHost = _configManager->GetActiveServer();
-        _state.session.authToken = _configManager->GetActiveToken();
-        auto session = _configManager->GetActiveSession();
-        if (session.has_value()) {
-            _state.session.userId = session->userId;
-            _state.session.userName = session->userName;
-        }
+    _state.session.serverHost = _configManager.GetActiveServer();
+    _state.session.authToken = _configManager.GetActiveToken();
+    auto session = _configManager.GetActiveSession();
+    if (session) {
+        _state.session.userId = session->userId;
+        _state.session.userName = session->userName;
     }
-    _state.connectionStatus = _state.session.IsAuthenticated()
-                                  ? State::ConnectionStatus::Connecting
-                                  : State::ConnectionStatus::Offline;
-    if (!_state.session.IsAuthenticated()) {
-        if (_configManager && !_configManager->GetSavedProjects().empty()) {
+
+    if (_state.session.IsAuthenticated()) {
+        _state.connectionStatus = State::ConnectionStatus::Connecting;
+    } else {
+        _state.connectionStatus = State::ConnectionStatus::Offline;
+        if (!_configManager.GetSavedProjects().empty()) {
             _state.session.serverHost.clear();
             _state.activeModal = State::ModalType::ProjectModal;
             _showProjectModal = true;
@@ -136,14 +141,11 @@ void MainScreen::InitState() {
 }
 
 void MainScreen::StartHealthMonitoring() {
-    if (!_backendClient) {
-        return;
-    }
     if (_healthChecker) {
         _healthChecker->Stop();
     }
 
-    _healthChecker = std::make_unique<Grpc::HealthChecker>(
+    _healthChecker.emplace(
         _backendClient, std::chrono::seconds(5),
         [this](const Common::Result<aquarium::api::HealthResponse>& result) {
             if (result.HasValue() &&
@@ -160,13 +162,10 @@ void MainScreen::StartHealthMonitoring() {
 }
 
 void MainScreen::StartEventSubscription() {
-    if (!_backendClient) {
-        return;
-    }
     if (_eventSubscriber) {
         _eventSubscriber->Stop();
     }
-    _eventSubscriber = std::make_unique<Grpc::EventSubscriber>(
+    _eventSubscriber.emplace(
         _backendClient,
         [this](const aquarium::api::TaskEvent& event) {
             HandleTaskEvent(event);
@@ -203,10 +202,11 @@ void MainScreen::HandleTaskEvent(const aquarium::api::TaskEvent& event) {
     case TaskEvent::STATUS_CHANGED:
         if (event.has_task()) {
             Dispatch(State::TaskUpdatedAction{event.task()});
+            std::string toastMsg = "Task #" + std::to_string(event.taskid());
+            toastMsg += " moved to ";
+            toastMsg += GetStatusBadge(event.task().status()).text;
             Dispatch(State::ShowToastAction{
-                .message = "Task #" + std::to_string(event.taskid()) +
-                           " moved to " +
-                           GetStatusBadge(event.task().status()).text,
+                .message = std::move(toastMsg),
                 .severity = State::ToastSeverity::Info,
             });
         }
@@ -300,52 +300,72 @@ Element MainScreen::RenderHeader() const {
            border;
 }
 
-void MainScreen::FetchInitialData() {
-    if (!_backendClient) {
-        return;
-    }
+Common::DetachedTask MainScreen::FetchInitialData() {
     const auto generation = _sessionGeneration.load();
-    std::thread([this, generation] {
-        auto usersRes = _backendClient->GetAllUsers();
-        if (generation != _sessionGeneration.load()) {
-            return;
-        }
-        if (usersRes.HasValue()) {
-            Dispatch(State::UsersLoadedAction{usersRes.Value()});
-        }
 
-        auto tasksRes = _backendClient->GetTasks();
-        if (generation != _sessionGeneration.load()) {
-            return;
+    struct SwitchToFetchThread {
+        std::jthread& thread;
+        std::mutex& mutex;
+        [[nodiscard]] bool await_ready() const noexcept {
+            return false;
         }
-        if (tasksRes.HasValue()) {
-            std::vector<aquarium::api::Task> tasksList;
-            tasksList.reserve(tasksRes.Value().tasks_size());
-            for (int i = 0; i < tasksRes.Value().tasks_size(); ++i) {
-                tasksList.push_back(tasksRes.Value().tasks(i));
+        void await_suspend(std::coroutine_handle<> handle) const {
+            std::jthread previous;
+            {
+                std::scoped_lock lock(mutex);
+                previous = std::exchange(
+                    thread, std::jthread([handle](std::stop_token) {
+                        handle.resume();
+                    }));
             }
-            Dispatch(State::TasksLoadedAction{tasksList});
+        }
+        void await_resume() const noexcept {}
+    };
 
-            if (!tasksList.empty()) {
-                auto firstId = tasksList.front().id();
-                auto commentsRes = _backendClient->GetComments(firstId);
-                if (generation != _sessionGeneration.load()) {
-                    return;
-                }
-                if (commentsRes.HasValue()) {
-                    Dispatch(State::CommentsLoadedAction{
-                        .taskId = firstId,
-                        .comments = commentsRes.Value(),
-                    });
-                }
-            }
-        } else {
-            Dispatch(State::ShowToastAction{
-                .message = "Failed to load tasks: " + tasksRes.Error().message,
-                .severity = State::ToastSeverity::Error,
-            });
+    co_await SwitchToFetchThread{.thread = _fetchThread, .mutex = _fetchMutex};
+    if (generation != _sessionGeneration.load()) {
+        co_return;
+    }
+
+    auto usersRes = co_await _backendClient.GetAllUsers();
+    if (generation != _sessionGeneration.load()) {
+        co_return;
+    }
+    if (usersRes.HasValue()) {
+        Dispatch(State::UsersLoadedAction{usersRes.Value()});
+    }
+
+    auto tasksRes = _backendClient.GetTasks();
+    if (generation != _sessionGeneration.load()) {
+        co_return;
+    }
+    if (tasksRes.HasValue()) {
+        std::vector<aquarium::api::Task> tasksList;
+        tasksList.reserve(tasksRes.Value().tasks_size());
+        for (int i = 0; i < tasksRes.Value().tasks_size(); ++i) {
+            tasksList.push_back(tasksRes.Value().tasks(i));
         }
-    }).detach();
+        Dispatch(State::TasksLoadedAction{tasksList});
+
+        if (!tasksList.empty()) {
+            auto firstId = tasksList.front().id();
+            auto commentsRes = _backendClient.GetComments(firstId);
+            if (generation != _sessionGeneration.load()) {
+                co_return;
+            }
+            if (commentsRes.HasValue()) {
+                Dispatch(State::CommentsLoadedAction{
+                    .taskId = firstId,
+                    .comments = commentsRes.Value(),
+                });
+            }
+        }
+    } else {
+        Dispatch(State::ShowToastAction{
+            .message = "Failed to load tasks: " + tasksRes.Error().message,
+            .severity = State::ToastSeverity::Error,
+        });
+    }
 }
 
 void MainScreen::ExitToProjectSelector() {
@@ -363,20 +383,14 @@ void MainScreen::ExitToProjectSelector() {
     if (_eventSubscriber) {
         _eventSubscriber->Stop();
     }
-    if (_backendClient) {
-        _backendClient->SetAuthToken("");
-    }
+    _backendClient.SetAuthToken("");
 
     Dispatch(State::ExitProjectAction{});
 }
 
 void MainScreen::HandleSelectProject(const std::string& server) {
-    if (!_configManager || !_backendClient) {
-        return;
-    }
-
     _projectModalError.clear();
-    if (!_configManager->SwitchActiveProject(server)) {
+    if (!_configManager.SwitchActiveProject(server)) {
         _projectModalError = "Project '" + server + "' not found in config.";
         Dispatch(State::ShowToastAction{
             .message = _projectModalError,
@@ -385,10 +399,10 @@ void MainScreen::HandleSelectProject(const std::string& server) {
         return;
     }
 
-    auto session = _configManager->GetActiveSession();
+    auto session = _configManager.GetActiveSession();
     if (!session.has_value() || session->authToken.empty()) {
-        _backendClient->SetTargetServer(server);
-        _backendClient->SetAuthToken("");
+        _backendClient.SetTargetServer(server);
+        _backendClient.SetAuthToken("");
         Dispatch(State::SetSessionAction{
             .server = server,
             .userId = 0,
@@ -407,8 +421,8 @@ void MainScreen::HandleSelectProject(const std::string& server) {
         _eventSubscriber->Stop();
     }
 
-    _backendClient->SetTargetServer(server);
-    _backendClient->SetAuthToken(session->authToken);
+    _backendClient.SetTargetServer(server);
+    _backendClient.SetAuthToken(session->authToken);
 
     Dispatch(State::SetSessionAction{
         .server = server,
@@ -431,11 +445,7 @@ void MainScreen::HandleSelectProject(const std::string& server) {
 
 void MainScreen::HandleDeleteProject(const std::string& server,
                                      bool forceLocal) {
-    if (!_configManager) {
-        return;
-    }
-
-    const auto& servers = _configManager->GetConfig().servers;
+    const auto& servers = _configManager.GetConfig().servers;
     auto it = servers.find(server);
     if (it == servers.end()) {
         return;
@@ -443,7 +453,7 @@ void MainScreen::HandleDeleteProject(const std::string& server,
     const Config::ServerEntry entry = it->second;
 
     if (forceLocal || entry.userId <= 0 || entry.authToken.empty()) {
-        _configManager->RemoveProject(server);
+        _configManager.RemoveProject(server);
         _projectModalError.clear();
         Dispatch(State::ShowToastAction{
             .message = "Project '" + server + "' removed from config.",
@@ -469,10 +479,9 @@ void MainScreen::HandleDeleteProject(const std::string& server,
             .details = "",
         });
 
-        if (_backendClient &&
-            _backendClient->GetTargetServer() == "custom_channel") {
-            _backendClient->SetAuthToken(entry.authToken);
-            res = _backendClient->DeleteUser(entry.userId);
+        if (_backendClient.GetTargetServer() == "custom_channel") {
+            _backendClient.SetAuthToken(entry.authToken);
+            res = _backendClient.DeleteUser(entry.userId);
         } else {
             Grpc::BackendClient deleteClient(server, entry.authToken);
             res = deleteClient.DeleteUser(entry.userId);
@@ -481,7 +490,7 @@ void MainScreen::HandleDeleteProject(const std::string& server,
         _screen.Post([this, server, res] {
             _isDeletingProject = false;
             if (res.HasValue()) {
-                _configManager->RemoveProject(server);
+                _configManager.RemoveProject(server);
                 _projectModalError.clear();
                 _state = Reducer::Reduce(
                     _state,
@@ -493,7 +502,7 @@ void MainScreen::HandleDeleteProject(const std::string& server,
             } else if (res.Error().code ==
                            Common::AppErrorCode::UNAUTHENTICATED ||
                        res.Error().code == Common::AppErrorCode::NOT_FOUND) {
-                _configManager->RemoveProject(server);
+                _configManager.RemoveProject(server);
                 _projectModalError.clear();
                 _state = Reducer::Reduce(
                     _state,
@@ -519,9 +528,6 @@ void MainScreen::HandleDeleteProject(const std::string& server,
 void MainScreen::HandleAuthSubmit(const std::string& server,
                                   const std::string& name,
                                   const std::string& inviteKey) {
-    if (!_backendClient) {
-        return;
-    }
 
     ++_sessionGeneration;
     if (_healthChecker) {
@@ -531,16 +537,14 @@ void MainScreen::HandleAuthSubmit(const std::string& server,
         _eventSubscriber->Stop();
     }
 
-    _backendClient->SetTargetServer(server);
-    _backendClient->SetAuthToken("");
-    auto res = _backendClient->AddUser(name, inviteKey);
+    _backendClient.SetTargetServer(server);
+    _backendClient.SetAuthToken("");
+    auto res = _backendClient.AddUser(name, inviteKey);
     if (res.HasValue()) {
         auto user = res.Value();
-        if (_configManager) {
-            _configManager->SaveProjectSession(server, user.id(), user.name(),
-                                               user.key());
-        }
-        _backendClient->SetAuthToken(user.key());
+        _configManager.SaveProjectSession(server, user.id(), user.name(),
+                                          user.key());
+        _backendClient.SetAuthToken(user.key());
 
         Dispatch(State::SetSessionAction{
             .server = server,
@@ -639,16 +643,14 @@ Component MainScreen::BuildLayout() {
                     .getProjects =
                         [this] {
                             std::vector<Views::ProjectEntryView> result;
-                            if (_configManager) {
-                                auto saved = _configManager->GetSavedProjects();
-                                result.reserve(saved.size());
-                                for (const auto& p : saved) {
-                                    result.push_back(Views::ProjectEntryView{
-                                        .server = p.server,
-                                        .userId = p.entry.userId,
-                                        .userName = p.entry.userName,
-                                    });
-                                }
+                            auto saved = _configManager.GetSavedProjects();
+                            result.reserve(saved.size());
+                            for (const auto& p : saved) {
+                                result.push_back(Views::ProjectEntryView{
+                                    .server = p.server,
+                                    .userId = p.entry.userId,
+                                    .userName = p.entry.userName,
+                                });
                             }
                             return result;
                         },

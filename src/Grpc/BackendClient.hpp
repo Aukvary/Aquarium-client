@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <TaskStoreService.grpc.pb.h>
 #include <UserStoreService.grpc.pb.h>
 #include <UtilsService.grpc.pb.h>
@@ -19,6 +20,7 @@ namespace Aquarium::Grpc {
 using Common::AppError;
 using Common::AppErrorCode;
 using Common::Result;
+using Common::Task;
 
 struct GetTasksFilter {
     std::optional<aquarium::api::TaskStatus> status;
@@ -32,14 +34,6 @@ AppError MapGrpcStatus(const grpc::Status& status);
 
 class BackendClient {
 private:
-    void InitStubs(std::shared_ptr<grpc::ChannelInterface> channel);
-    [[nodiscard]] std::shared_ptr<aquarium::api::UtilsService::Stub>
-    GetUtilsStub() const;
-    [[nodiscard]] std::shared_ptr<aquarium::api::UserStoreService::Stub>
-    GetUserStub() const;
-    [[nodiscard]] std::shared_ptr<aquarium::api::TaskStoreService::Stub>
-    GetTaskStub() const;
-
     mutable std::mutex _mutex;
     std::string _targetServer;
     std::string _authToken;
@@ -49,19 +43,35 @@ private:
     std::shared_ptr<aquarium::api::UserStoreService::Stub> _userStub;
     std::shared_ptr<aquarium::api::TaskStoreService::Stub> _taskStub;
 
+    void InitStubs(std::shared_ptr<grpc::ChannelInterface> channel);
+    void InitStubsLocked(std::shared_ptr<grpc::ChannelInterface> channel);
+    [[nodiscard]] std::shared_ptr<aquarium::api::UtilsService::Stub>
+    GetUtilsStub() const;
+    [[nodiscard]] std::shared_ptr<aquarium::api::UserStoreService::Stub>
+    GetUserStub() const;
+    [[nodiscard]] std::shared_ptr<aquarium::api::TaskStoreService::Stub>
+    GetTaskStub() const;
+
 public:
-    explicit BackendClient(const std::string& targetServer,
+    explicit BackendClient(std::string_view targetServer,
                            std::string authToken = "");
 
     explicit BackendClient(std::shared_ptr<grpc::ChannelInterface> channel,
                            std::string authToken = "");
 
+    explicit BackendClient(BackendClient&& client) noexcept;
+
     virtual ~BackendClient() = default;
 
-    void SetAuthToken(std::string token);
+    void SetAuthToken(const char* token);
+    void SetAuthToken(std::string_view token);
+    void SetAuthToken(std::string&& token);
     [[nodiscard]] std::string GetAuthToken() const;
-    void SetTargetServer(const std::string& targetServer);
+    void SetTargetServer(const char* targetServer);
+    void SetTargetServer(std::string_view targetServer);
+    void SetTargetServer(std::string&& targetServer);
     [[nodiscard]] std::string GetTargetServer() const;
+    [[nodiscard]] bool HasChannel() const;
 
     [[nodiscard]] std::unique_ptr<grpc::ClientContext> CreateContext(
         std::chrono::milliseconds timeout = std::chrono::milliseconds(5000),
@@ -73,7 +83,7 @@ public:
     [[nodiscard]] Result<aquarium::api::HealthResponse>
     Health(std::chrono::milliseconds timeout = std::chrono::milliseconds(3000));
 
-    [[nodiscard]] Result<std::vector<aquarium::api::User>> GetAllUsers();
+    [[nodiscard]] Task<Result<std::vector<aquarium::api::User>>> GetAllUsers();
     [[nodiscard]] Result<aquarium::api::User> GetUser(std::int64_t userId);
     [[nodiscard]] Result<aquarium::api::User>
     AddUser(const std::string& name, const std::string& inviteKey);

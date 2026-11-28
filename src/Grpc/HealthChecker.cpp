@@ -4,11 +4,10 @@
 
 namespace Aquarium::Grpc {
 
-HealthChecker::HealthChecker(std::shared_ptr<BackendClient> client,
+HealthChecker::HealthChecker(BackendClient& client,
                              std::chrono::milliseconds interval,
                              HealthCallback callback)
-    : _client(std::move(client)), _interval(interval),
-      _callback(std::move(callback)) {}
+    : _client(client), _interval(interval), _callback(std::move(callback)) {}
 
 HealthChecker::~HealthChecker() {
     Stop();
@@ -19,11 +18,13 @@ void HealthChecker::Start() {
     if (_running) {
         return;
     }
+    _triggerNow = false;
     _running = true;
     _workerThread = std::jthread([this](std::stop_token st) { RunLoop(st); });
 }
 
 void HealthChecker::Stop() {
+    _workerThread.request_stop();
     {
         std::scoped_lock lock(_mutex);
         if (!_running) {
@@ -31,9 +32,8 @@ void HealthChecker::Stop() {
         }
         _running = false;
     }
+    _cv.notify_all();
     if (_workerThread.joinable()) {
-        _workerThread.request_stop();
-        _cv.notify_all();
         _workerThread.join();
     }
 }
@@ -47,17 +47,17 @@ void HealthChecker::TriggerCheck() {
 }
 
 bool HealthChecker::IsRunning() const noexcept {
-    return _running;
+    return _running.load(std::memory_order_acquire);
 }
 
 void HealthChecker::RunLoop(std::stop_token stopToken) {
     while (!stopToken.stop_requested()) {
-        if (_client && _callback) {
-            auto result = _client->Health();
+        if (_callback) {
+            auto result = _client.Health();
             _callback(result);
         }
 
-        std::unique_lock<std::mutex> lock(_mutex);
+        std::unique_lock lock(_mutex);
         _cv.wait_for(lock, stopToken, _interval, [this, &stopToken] {
             return stopToken.stop_requested() || _triggerNow;
         });

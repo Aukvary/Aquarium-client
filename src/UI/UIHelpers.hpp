@@ -9,39 +9,56 @@
 #include <ftxui/screen/color.hpp>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <TaskStoreService.pb.h>
 #include <utility>
 
 namespace Aquarium::UI {
 
 struct StatusBadge {
-    std::string text;
+    std::string_view text;
+    std::string_view bracketed;
     ftxui::Color color;
 };
 
-inline StatusBadge GetStatusBadge(aquarium::api::TaskStatus status) {
+[[nodiscard]] inline StatusBadge
+GetStatusBadge(aquarium::api::TaskStatus status) noexcept {
     switch (status) {
     case aquarium::api::TaskStatus::PLAN:
-        return {.text = "PLAN", .color = ftxui::Color::GrayDark};
+        return {.text = "PLAN",
+                .bracketed = "[PLAN]",
+                .color = ftxui::Color::GrayDark};
     case aquarium::api::TaskStatus::ACTIVE:
-        return {.text = "ACTIVE", .color = ftxui::Color::Cyan};
+        return {.text = "ACTIVE",
+                .bracketed = "[ACTIVE]",
+                .color = ftxui::Color::Cyan};
     case aquarium::api::TaskStatus::IN_REVIEW:
-        return {.text = "IN_REVIEW", .color = ftxui::Color::YellowLight};
+        return {.text = "IN_REVIEW",
+                .bracketed = "[IN_REVIEW]",
+                .color = ftxui::Color::YellowLight};
     case aquarium::api::TaskStatus::COMPLETE:
-        return {.text = "COMPLETE", .color = ftxui::Color::GreenLight};
+        return {.text = "COMPLETE",
+                .bracketed = "[COMPLETE]",
+                .color = ftxui::Color::GreenLight};
     case aquarium::api::TaskStatus::VERIFIED:
-        return {.text = "VERIFIED", .color = ftxui::Color::MagentaLight};
+        return {.text = "VERIFIED",
+                .bracketed = "[VERIFIED]",
+                .color = ftxui::Color::MagentaLight};
     case aquarium::api::TaskStatus::ARCHIVE:
-        return {.text = "ARCHIVE", .color = ftxui::Color::GrayDark};
+        return {.text = "ARCHIVE",
+                .bracketed = "[ARCHIVE]",
+                .color = ftxui::Color::GrayDark};
     default:
-        return {.text = "UNSPECIFIED", .color = ftxui::Color::Default};
+        return {.text = "UNSPECIFIED",
+                .bracketed = "[UNSPECIFIED]",
+                .color = ftxui::Color::Default};
     }
 }
 
 inline ftxui::Element RenderStatusBadge(aquarium::api::TaskStatus status) {
-    auto badge = GetStatusBadge(status);
-    return ftxui::text("[" + badge.text + "]") | ftxui::color(badge.color) |
-           ftxui::bold;
+    const auto badge = GetStatusBadge(status);
+    return ftxui::text(std::string(badge.bracketed)) |
+           ftxui::color(badge.color) | ftxui::bold;
 }
 
 inline ftxui::Element RenderTerminalTooSmallWarning(int currentWidth,
@@ -77,10 +94,10 @@ inline ftxui::Component CreateTaskScopeToggleButton(
         dispatch(State::ToggleOnlyMyTasksAction{});
     };
     opt.transform = [&state](const ftxui::EntryState& s) {
-        const std::string label = state.filter.onlyMyTasks
-                                      ? "[Show: My Tasks]"
-                                      : "[Show: All Tasks]";
-        auto elem = ftxui::text(label);
+        const std::string_view label = state.filter.onlyMyTasks
+                                           ? "[Show: My Tasks]"
+                                           : "[Show: All Tasks]";
+        auto elem = ftxui::text(std::string(label));
         if (state.filter.onlyMyTasks) {
             elem =
                 elem | ftxui::color(ftxui::Color::YellowLight) | ftxui::bold;

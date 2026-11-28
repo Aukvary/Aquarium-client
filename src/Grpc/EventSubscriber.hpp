@@ -4,7 +4,6 @@
 
 #include <condition_variable>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <stop_token>
 #include <TaskStoreService.pb.h>
@@ -13,24 +12,10 @@
 namespace Aquarium::Grpc {
 
 class EventSubscriber {
+public:
     using EventCallback = std::function<void(const aquarium::api::TaskEvent&)>;
     using ReconnectCallback = std::function<void()>;
-
-private:
-    void RunLoop(std::stop_token stopToken);
-
-    std::shared_ptr<BackendClient> _client;
-    EventCallback _eventCallback;
-    ReconnectCallback _reconnectCallback;
-
-    std::mutex _mutex;
-    std::condition_variable_any _cv;
-    std::jthread _workerThread;
-    grpc::ClientContext* _activeContext{nullptr};
-    bool _running{false};
-
-public:
-    EventSubscriber(std::shared_ptr<BackendClient> client,
+    EventSubscriber(BackendClient& client,
                     EventCallback eventCallback,
                     ReconnectCallback reconnectCallback = nullptr);
 
@@ -43,6 +28,18 @@ public:
     void Stop();
 
     [[nodiscard]] bool IsRunning() const noexcept;
+
+private:
+    BackendClient& _client;
+    EventCallback _eventCallback;
+    ReconnectCallback _reconnectCallback;
+
+    mutable std::mutex _mutex;
+    std::condition_variable_any _cv;
+    std::jthread _workerThread;
+    grpc::ClientContext* _activeContext{nullptr};
+    std::atomic<bool> _running{false};
+    void RunLoop(std::stop_token stopToken);
 };
 
 } // namespace Aquarium::Grpc

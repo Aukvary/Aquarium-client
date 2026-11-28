@@ -1,4 +1,4 @@
-#include "ConfigManager.hpp"
+#include "./ConfigManager.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -36,10 +36,20 @@ std::optional<ServerEntry> ClientConfig::GetActiveSession() const {
     return std::nullopt;
 }
 
-void ClientConfig::SetActiveSession(const std::string& server,
+void ClientConfig::SetActiveSession(std::string&& server,
+                                    const ServerEntry& entry) {
+    activeServer = std::move(server);
+    servers[activeServer] = entry;
+}
+void ClientConfig::SetActiveSession(const char* server,
+                                    const ServerEntry& entry) {
+    activeServer = server ? server : "";
+    servers[activeServer] = entry;
+}
+void ClientConfig::SetActiveSession(std::string_view server,
                                     const ServerEntry& entry) {
     activeServer = server;
-    servers[server] = entry;
+    servers[activeServer] = entry;
 }
 
 void to_json(nlohmann::json& j, const ClientConfig& config) {
@@ -77,52 +87,20 @@ std::filesystem::path ConfigManager::GetDefaultConfigPath() {
     return std::filesystem::current_path() / "config.json";
 }
 
-CliOverrides
-ConfigManager::ParseCommandLine(std::span<const std::string_view> args) {
-    CliOverrides overrides;
-    for (std::size_t i = 1; i < args.size(); ++i) {
-        std::string_view arg = args[i];
-        if (arg == "--server" || arg == "-s") {
-            if (i + 1 < args.size()) {
-                overrides.server = std::string(args[++i]);
-            }
-        } else if (arg == "--token" || arg == "-t") {
-            if (i + 1 < args.size()) {
-                overrides.token = std::string(args[++i]);
-            }
-        } else if (arg == "--smoke-test") {
-            overrides.smokeTest = true;
-        } else if (arg == "--help" || arg == "-h") {
-            overrides.showHelp = true;
-        }
-    }
-    return overrides;
-}
-
-CliOverrides
-ConfigManager::ParseCommandLine(int argc,
-                                std::span<const std::string_view> argv) {
-    if (argc <= 0) {
-        return {};
-    }
-    const auto count = std::min(static_cast<std::size_t>(argc), argv.size());
-    return ParseCommandLine(argv.first(count));
-}
-
 void ConfigManager::ApplyOverrides(const CliOverrides& overrides) {
     _overrides = overrides;
 
     if (!_overrides.server.has_value()) {
         const char* envServer = std::getenv("AQUARIUM_SERVER");
         if (envServer != nullptr && *envServer != '\0') {
-            _overrides.server = std::string(envServer);
+            _overrides.server = std::string_view(envServer);
         }
     }
 
     if (!_overrides.token.has_value()) {
         const char* envToken = std::getenv("AQUARIUM_TOKEN");
         if (envToken != nullptr && *envToken != '\0') {
-            _overrides.token = std::string(envToken);
+            _overrides.token = std::string_view(envToken);
         }
     }
 }
@@ -206,14 +184,14 @@ ClientConfig& ConfigManager::GetMutableConfig() noexcept {
 
 std::string ConfigManager::GetActiveServer() const {
     if (_overrides.server.has_value()) {
-        return *_overrides.server;
+        return std::string(*_overrides.server);
     }
     return _config.activeServer;
 }
 
 std::string ConfigManager::GetActiveToken() const {
     if (_overrides.token.has_value()) {
-        return *_overrides.token;
+        return std::string(*_overrides.token);
     }
     auto session = GetActiveSession();
     if (session.has_value()) {

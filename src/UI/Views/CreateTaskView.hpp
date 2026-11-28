@@ -6,13 +6,12 @@
 
 #include <ftxui/component/component.hpp>
 #include <functional>
-#include <memory>
 
 namespace Aquarium::UI::Views {
 
 ftxui::Component
 CreateCreateTaskView(const State::AppState& state,
                      std::function<void(const State::Action&)> dispatch,
-                     std::shared_ptr<Grpc::BackendClient> client);
+                     Grpc::BackendClient& client);
 
 } // namespace Aquarium::UI::Views

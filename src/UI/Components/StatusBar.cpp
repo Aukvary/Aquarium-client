@@ -2,6 +2,7 @@
 
 #include <ftxui/dom/elements.hpp>
 #include <string>
+#include <string_view>
 
 namespace Aquarium::UI::Components {
 
@@ -29,7 +30,7 @@ Element RenderToast(const std::optional<State::ToastMessage>& toast) {
     }
 
     Color badgeColor = Color::Cyan;
-    std::string badgeText = "[INFO] ";
+    std::string_view badgeText = "[INFO] ";
 
     switch (toast->severity) {
     case ToastSeverity::Info:
@@ -52,7 +53,7 @@ Element RenderToast(const std::optional<State::ToastMessage>& toast) {
 
     return hbox({
         text("  "),
-        text(badgeText) | color(badgeColor) | bold,
+        text(std::string(badgeText)) | color(badgeColor) | bold,
         text(toast->message) | bold,
     });
 }

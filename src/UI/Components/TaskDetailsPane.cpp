@@ -5,9 +5,9 @@
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace Aquarium::UI::Components {
 
@@ -15,31 +15,33 @@ using namespace ftxui;
 
 Component CreateTaskDetailsPane(const State::AppState& state,
                                 TaskDetailsCallbacks callbacks) {
-    auto btnPass = Button("Pass", [&state, callbacks] {
+    auto cb = std::make_shared<TaskDetailsCallbacks>(std::move(callbacks));
+
+    auto btnPass = Button("Pass", [&state, cb] {
         auto task = state.GetSelectedTask();
-        if (task != nullptr && callbacks.onPassTask) {
-            callbacks.onPassTask(task->id());
+        if (task != nullptr && cb->onPassTask) {
+            cb->onPassTask(task->id());
         }
     });
 
-    auto btnToggleArchive = Button("Toggle Archive", [&state, callbacks] {
+    auto btnToggleArchive = Button("Toggle Archive", [&state, cb] {
         auto task = state.GetSelectedTask();
-        if (task != nullptr && callbacks.onToggleArchive) {
-            callbacks.onToggleArchive(task->id());
+        if (task != nullptr && cb->onToggleArchive) {
+            cb->onToggleArchive(task->id());
         }
     });
 
-    auto btnAssign = Button("Assign Worker", [&state, callbacks] {
+    auto btnAssign = Button("Assign Worker", [&state, cb] {
         auto task = state.GetSelectedTask();
-        if (task != nullptr && callbacks.onAssignWorker) {
-            callbacks.onAssignWorker(task->id());
+        if (task != nullptr && cb->onAssignWorker) {
+            cb->onAssignWorker(task->id());
         }
     });
 
-    auto btnDelete = Button("Delete", [&state, callbacks] {
+    auto btnDelete = Button("Delete", [&state, cb] {
         auto task = state.GetSelectedTask();
-        if (task != nullptr && callbacks.onDeleteTask) {
-            callbacks.onDeleteTask(task->id());
+        if (task != nullptr && cb->onDeleteTask) {
+            cb->onDeleteTask(task->id());
         }
     });
 

@@ -130,9 +130,7 @@ TEST_F(ConfigTest, CommandLineArgumentOverrides) {
         "--token",         "cli_override_token",
     };
 
-    int argc = sizeof(argv) / sizeof(argv[0]);
-
-    auto overrides = ConfigManager::ParseCommandLine(argc, argv);
+    auto overrides = ConfigManager::ParseCommandLine(argv);
     EXPECT_EQ(overrides.server, "custom.prod.host:8443");
     EXPECT_EQ(overrides.token, "cli_override_token");
 
