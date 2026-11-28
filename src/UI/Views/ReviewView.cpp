@@ -5,6 +5,8 @@
 #include "UI/UIHelpers.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -61,15 +63,36 @@ struct ReviewFormState {
 
 Component CreateReviewView(const State::AppState& state,
                            std::function<void(const State::Action&)> dispatch,
-                           Grpc::BackendClient& client) {
-    auto selectTaskAndFetchComments = [dispatch, &client](std::int64_t taskId) {
+                           Grpc::BackendClient& client,
+                           Common::CoroutineExecutor* executor) {
+    auto commentFetchSeq = std::make_shared<std::atomic<std::uint64_t>>(0);
+    auto selectTaskAndFetchComments =
+        [dispatch, &client, executor,
+         commentFetchSeq](std::int64_t taskId) -> Common::DetachedTask {
         dispatch(State::SelectTaskAction{taskId});
+        if (!client.HasChannel()) {
+            co_return;
+        }
+        const auto seq =
+            commentFetchSeq->fetch_add(1, std::memory_order_acq_rel) + 1;
+        dispatch(State::SetLoadingCommentsAction{true});
+        co_await Common::ResumeBackground(executor);
+        if ((executor != nullptr && executor->IsStopped()) ||
+            seq != commentFetchSeq->load(std::memory_order_acquire)) {
+            co_return;
+        }
         auto commentsRes = client.GetComments(taskId);
+        if ((executor != nullptr && executor->IsStopped()) ||
+            seq != commentFetchSeq->load(std::memory_order_acquire)) {
+            co_return;
+        }
         if (commentsRes.HasValue()) {
             dispatch(State::CommentsLoadedAction{
                 .taskId = taskId,
-                .comments = commentsRes.Value(),
+                .comments = std::move(commentsRes.Value()),
             });
+        } else {
+            dispatch(State::SetLoadingCommentsAction{false});
         }
     };
 
@@ -84,13 +107,20 @@ Component CreateReviewView(const State::AppState& state,
 
     auto btnApprove = Button(
         "✓ Approve & Verify",
-        [&state, dispatch, &client] {
+        [&state, dispatch, &client, executor]() -> Common::DetachedTask {
             auto task = state.GetSelectedTask();
             if (task == nullptr) {
-                return;
+                co_return;
             }
-            auto taskId = task->id();
+            const auto taskId = task->id();
+            co_await Common::ResumeBackground(executor);
+            if (executor != nullptr && executor->IsStopped()) {
+                co_return;
+            }
             auto res = client.UpdateTaskStatus(taskId, TaskStatus::VERIFIED);
+            if (executor != nullptr && executor->IsStopped()) {
+                co_return;
+            }
             if (res.HasValue()) {
                 dispatch(State::TaskStatusChangedAction{
                     .taskId = taskId,
@@ -112,10 +142,11 @@ Component CreateReviewView(const State::AppState& state,
 
     auto btnReject = Button(
         "✗ Reject with Reason",
-        [&state, dispatch, &client, formState] {
+        [&state, dispatch, &client, executor,
+         formState]() -> Common::DetachedTask {
             auto task = state.GetSelectedTask();
             if (task == nullptr) {
-                return;
+                co_return;
             }
             if (formState->revisionReason.empty()) {
                 formState->reasonError = "Revision reason is mandatory.";
@@ -123,11 +154,20 @@ Component CreateReviewView(const State::AppState& state,
                     .message = "Cannot reject: revision reason is required.",
                     .severity = State::ToastSeverity::Warning,
                 });
-                return;
+                co_return;
             }
             formState->reasonError.clear();
-            auto taskId = task->id();
-            auto res = client.RejectTask(taskId, formState->revisionReason);
+            const auto taskId = task->id();
+            std::string reason = formState->revisionReason;
+            co_await Common::ResumeBackground(executor);
+            if (executor != nullptr && executor->IsStopped()) {
+                co_return;
+            }
+            auto res = client.RejectTask(taskId, reason);
+            co_await Common::ResumeUi(executor);
+            if (executor != nullptr && executor->IsStopped()) {
+                co_return;
+            }
             if (res.HasValue()) {
                 dispatch(State::TaskRejectedAction{
                     .task = res.Value().task(),
@@ -151,14 +191,23 @@ Component CreateReviewView(const State::AppState& state,
     // Remarks pane for comment history & discussion
     Components::RemarksCallbacks remarksCallbacks{
         .onAddComment =
-            [&state, dispatch, &client](std::int64_t taskId,
-                                        const std::string& content) {
-                auto res = client.AddComment(
-                    taskId, content,
-                    aquarium::api::CommentType::COMMENT_GENERAL,
+            [&state, dispatch, &client, executor](
+                std::int64_t taskId,
+                std::string content) -> Common::DetachedTask {
+                const auto authorId =
                     state.session.userId > 0
                         ? std::make_optional(state.session.userId)
-                        : std::nullopt);
+                        : std::nullopt;
+                co_await Common::ResumeBackground(executor);
+                if (executor != nullptr && executor->IsStopped()) {
+                    co_return;
+                }
+                auto res = client.AddComment(
+                    taskId, content,
+                    aquarium::api::CommentType::COMMENT_GENERAL, authorId);
+                if (executor != nullptr && executor->IsStopped()) {
+                    co_return;
+                }
                 if (res.HasValue()) {
                     dispatch(State::CommentAddedAction{res.Value()});
                     dispatch(State::ShowToastAction{

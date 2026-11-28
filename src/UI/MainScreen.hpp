@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Common/CoroutineExecutor.hpp"
 #include "Config/ConfigManager.hpp"
 #include "Grpc/BackendClient.hpp"
 #include "Grpc/EventSubscriber.hpp"
@@ -8,14 +9,11 @@
 #include "State/AppState.hpp"
 
 #include <atomic>
-#include <atomic>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 
 namespace Aquarium::UI {
 
@@ -37,9 +35,7 @@ private:
     std::atomic<std::uint64_t> _sessionGeneration{0};
     std::atomic<bool> _isDeletingProject{false};
     std::string _projectModalError;
-    std::mutex _fetchMutex;
-    std::jthread _actionThread;
-    std::jthread _fetchThread;
+    Common::CoroutineExecutor _executor;
 
     void InitState();
     void StartHealthMonitoring();
@@ -48,10 +44,11 @@ private:
     Common::DetachedTask FetchInitialData();
     void ExitToProjectSelector();
     void HandleSelectProject(const std::string& server);
-    void HandleDeleteProject(const std::string& server, bool forceLocal);
-    void HandleAuthSubmit(const std::string& server,
-                          const std::string& name,
-                          const std::string& inviteKey);
+    Common::DetachedTask HandleDeleteProject(std::string server,
+                                             bool forceLocal);
+    Common::DetachedTask HandleAuthSubmit(std::string server,
+                                          std::string name,
+                                          std::string inviteKey);
 
 public:
     explicit MainScreen(Config::ConfigManager& configManager);

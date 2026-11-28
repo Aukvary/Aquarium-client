@@ -56,7 +56,8 @@ bool ParseInt64Exact(std::string_view sv, std::int64_t& out) noexcept {
 Component
 CreateCreateTaskView(const State::AppState& state,
                      std::function<void(const State::Action&)> dispatch,
-                     Grpc::BackendClient& client) {
+                     Grpc::BackendClient& client,
+                     Common::CoroutineExecutor* executor) {
     auto form = std::make_shared<CreateTaskFormState>();
 
     InputOption singleOpt;
@@ -79,16 +80,17 @@ CreateCreateTaskView(const State::AppState& state,
         }
     });
 
-    auto submitForm = [&state, dispatch, &client, form] {
+    auto submitForm = [&state, dispatch, &client, executor,
+                       form]() -> Common::DetachedTask {
         if (form->title.empty()) {
             form->error = "Task title cannot be empty.";
-            return;
+            co_return;
         }
 
         if (state.session.userId <= 0) {
             form->error =
                 "Cannot create task: unauthenticated user. Please log in.";
-            return;
+            co_return;
         }
 
         CreateTaskRequest req;
@@ -113,7 +115,7 @@ CreateCreateTaskView(const State::AppState& state,
                         form->error = "Invalid worker ID: '";
                         form->error += token;
                         form->error += "'";
-                        return;
+                        co_return;
                     }
                     req.add_workerids(wid);
                 }
@@ -129,7 +131,7 @@ CreateCreateTaskView(const State::AppState& state,
             std::int64_t cid = 0;
             if (!ParseInt64Exact(form->checker, cid)) {
                 form->error = "Invalid checker ID: '" + form->checker + "'";
-                return;
+                co_return;
             }
             req.set_checkerid(cid);
         }
@@ -139,7 +141,7 @@ CreateCreateTaskView(const State::AppState& state,
             auto tsOpt = Common::ParseDate(form->dueDate);
             if (!tsOpt.has_value()) {
                 form->error = "Invalid date format. Expected YYYY-MM-DD.";
-                return;
+                co_return;
             }
             *req.mutable_duedate() = *tsOpt;
         }
@@ -148,10 +150,18 @@ CreateCreateTaskView(const State::AppState& state,
 
         if (!client.HasChannel()) {
             form->error = "Cannot create task: offline or client missing.";
-            return;
+            co_return;
         }
 
+        co_await Common::ResumeBackground(executor);
+        if (executor != nullptr && executor->IsStopped()) {
+            co_return;
+        }
         auto res = client.CreateTask(req);
+        co_await Common::ResumeUi(executor);
+        if (executor != nullptr && executor->IsStopped()) {
+            co_return;
+        }
         if (res.HasValue()) {
             auto created = res.Value();
             dispatch(State::TaskCreatedAction{created});

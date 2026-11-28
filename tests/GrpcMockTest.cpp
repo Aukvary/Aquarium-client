@@ -1,12 +1,20 @@
+#include "Common/CoroutineExecutor.hpp"
 #include "Common/Types.hpp"
 #include "Grpc/BackendClient.hpp"
 #include "Grpc/EventSubscriber.hpp"
 #include "Grpc/HealthChecker.hpp"
+#include "State/AppState.hpp"
+#include "State/Reducer.hpp"
+#include "UI/Views/TaskBoardView.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <ftxui/component/event.hpp>
 #include <grpcpp/grpcpp.h>
 #include <gtest/gtest.h>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <TaskStoreService.grpc.pb.h>
 #include <thread>
@@ -486,6 +494,97 @@ TEST_F(BackendClientTest, EventSubscriberReceivesLiveEvents) {
 
     subscriber.Stop();
     EXPECT_FALSE(subscriber.IsRunning());
+}
+
+TEST(CoroutineExecutorTest, SwitchesBetweenBackgroundAndUiThreads) {
+    const auto callerThreadId = std::this_thread::get_id();
+    std::atomic<bool> backgroundRanOnWorker{false};
+    std::atomic<bool> uiPosterInvoked{false};
+    std::atomic<bool> done{false};
+
+    std::mutex uiMutex;
+    std::condition_variable uiCv;
+    std::vector<std::function<void()>> uiQueue;
+
+    Common::CoroutineExecutor executor(
+        2, [&](std::function<void()> fn) {
+            uiPosterInvoked.store(true);
+            {
+                std::scoped_lock lock(uiMutex);
+                uiQueue.push_back(std::move(fn));
+            }
+            uiCv.notify_one();
+        });
+
+    auto runCoroutine = [&]() -> Common::DetachedTask {
+        co_await executor.Background();
+        backgroundRanOnWorker.store(std::this_thread::get_id() !=
+                                    callerThreadId);
+        co_await executor.Ui();
+        done.store(std::this_thread::get_id() == callerThreadId);
+    };
+
+    runCoroutine();
+
+    std::function<void()> uiTask;
+    {
+        std::unique_lock lock(uiMutex);
+        ASSERT_TRUE(uiCv.wait_for(lock, std::chrono::seconds(2),
+                                  [&] { return !uiQueue.empty(); }));
+        uiTask = std::move(uiQueue.front());
+    }
+    uiTask();
+
+    EXPECT_TRUE(backgroundRanOnWorker.load());
+    EXPECT_TRUE(uiPosterInvoked.load());
+    EXPECT_TRUE(done.load());
+}
+
+TEST_F(BackendClientTest, TaskBoardScrollFetchesCommentsAsynchronously) {
+    State::AppState state;
+    aquarium::api::Task t1;
+    t1.set_id(1);
+    t1.set_title("First task");
+    t1.set_status(TaskStatus::ACTIVE);
+
+    aquarium::api::Task t2;
+    t2.set_id(2);
+    t2.set_title("Second task");
+    t2.set_status(TaskStatus::ACTIVE);
+
+    state.tasks = {t1, t2};
+    state.selectedTaskId = 1;
+
+    std::mutex stateMutex;
+    std::condition_variable stateCv;
+    Common::CoroutineExecutor executor(2);
+
+    auto dispatch = [&](const State::Action& action) {
+        {
+            std::scoped_lock lock(stateMutex);
+            state = State::Reducer::Reduce(std::move(state), action);
+        }
+        stateCv.notify_all();
+    };
+
+    auto view = UI::Views::CreateTaskBoardView(state, dispatch, *_client,
+                                               &executor);
+
+    // Pressing 'j' must immediately select task #2 without blocking the UI
+    // thread and then asynchronously load comments in the background.
+    EXPECT_TRUE(view->OnEvent(ftxui::Event::Character('j')));
+    EXPECT_EQ(state.selectedTaskId, 2);
+
+    {
+        std::unique_lock lock(stateMutex);
+        ASSERT_TRUE(stateCv.wait_for(lock, std::chrono::seconds(2), [&] {
+            return !state.activeComments.empty();
+        }));
+        EXPECT_EQ(state.activeComments.front().taskid(), 2);
+        EXPECT_EQ(state.activeComments.front().content(), "First remark");
+    }
+
+    executor.Stop();
 }
 
 } // namespace Aquarium::Grpc::Tests

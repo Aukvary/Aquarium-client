@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Common/CoroutineExecutor.hpp"
 #include "Grpc/BackendClient.hpp"
 #include "State/Actions.hpp"
 #include "State/AppState.hpp"
@@ -11,7 +12,8 @@ namespace Aquarium::UI::Views {
 
 ftxui::Component
 CreateTaskBoardView(const State::AppState& state,
-                    std::function<void(const State::Action&)> dispatch,
-                    Grpc::BackendClient& client);
+                    const std::function<void(const State::Action&)>& dispatch,
+                    Grpc::BackendClient& client,
+                    Common::CoroutineExecutor* executor = nullptr);
 
 } // namespace Aquarium::UI::Views

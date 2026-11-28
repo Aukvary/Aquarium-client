@@ -19,7 +19,6 @@
 #include <ftxui/screen/terminal.hpp>
 #include <optional>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -95,7 +94,11 @@ MainScreen::MainScreen(Config::ConfigManager& configManager)
     : _configManager(configManager),
       _backendClient(configManager.GetActiveServer(),
                      configManager.GetActiveToken()),
-      _screen(ScreenInteractive::Fullscreen()) {
+      _screen(ScreenInteractive::Fullscreen()),
+      _executor(2, [this](std::function<void()> fn) {
+          _screen.Post(std::move(fn));
+          _screen.PostEvent(Event::Custom);
+      }) {
     InitState();
 }
 
@@ -106,14 +109,7 @@ MainScreen::~MainScreen() {
     if (_eventSubscriber) {
         _eventSubscriber->Stop();
     }
-    if (_actionThread.joinable()) {
-        _actionThread.request_stop();
-        _actionThread.join();
-    }
-    if (_fetchThread.joinable()) {
-        _fetchThread.request_stop();
-        _fetchThread.join();
-    }
+    _executor.Stop();
 }
 
 void MainScreen::InitState() {
@@ -303,32 +299,13 @@ Element MainScreen::RenderHeader() const {
 Common::DetachedTask MainScreen::FetchInitialData() {
     const auto generation = _sessionGeneration.load();
 
-    struct SwitchToFetchThread {
-        std::jthread& thread;
-        std::mutex& mutex;
-        [[nodiscard]] bool await_ready() const noexcept {
-            return false;
-        }
-        void await_suspend(std::coroutine_handle<> handle) const {
-            std::jthread previous;
-            {
-                std::scoped_lock lock(mutex);
-                previous = std::exchange(
-                    thread, std::jthread([handle](std::stop_token) {
-                        handle.resume();
-                    }));
-            }
-        }
-        void await_resume() const noexcept {}
-    };
-
-    co_await SwitchToFetchThread{.thread = _fetchThread, .mutex = _fetchMutex};
-    if (generation != _sessionGeneration.load()) {
+    co_await _executor.Background();
+    if (_executor.IsStopped() || generation != _sessionGeneration.load()) {
         co_return;
     }
 
     auto usersRes = co_await _backendClient.GetAllUsers();
-    if (generation != _sessionGeneration.load()) {
+    if (_executor.IsStopped() || generation != _sessionGeneration.load()) {
         co_return;
     }
     if (usersRes.HasValue()) {
@@ -443,12 +420,12 @@ void MainScreen::HandleSelectProject(const std::string& server) {
     FetchInitialData();
 }
 
-void MainScreen::HandleDeleteProject(const std::string& server,
-                                     bool forceLocal) {
+Common::DetachedTask MainScreen::HandleDeleteProject(std::string server,
+                                                      bool forceLocal) {
     const auto& servers = _configManager.GetConfig().servers;
     auto it = servers.find(server);
     if (it == servers.end()) {
-        return;
+        co_return;
     }
     const Config::ServerEntry entry = it->second;
 
@@ -459,77 +436,76 @@ void MainScreen::HandleDeleteProject(const std::string& server,
             .message = "Project '" + server + "' removed from config.",
             .severity = State::ToastSeverity::Info,
         });
-        return;
+        co_return;
     }
 
     if (_isDeletingProject.exchange(true)) {
-        return;
+        co_return;
     }
     _projectModalError.clear();
 
-    if (_actionThread.joinable()) {
-        _actionThread.request_stop();
-        _actionThread.join();
+    co_await _executor.Background();
+    if (_executor.IsStopped()) {
+        _isDeletingProject = false;
+        co_return;
     }
 
-    _actionThread = std::jthread([this, server, entry](std::stop_token) {
-        Common::Result<bool> res(Common::AppError{
-            .code = Common::AppErrorCode::INTERNAL_ERROR,
-            .message = "Client unavailable",
-            .details = "",
-        });
+    Common::Result<bool> res(Common::AppError{
+        .code = Common::AppErrorCode::INTERNAL_ERROR,
+        .message = "Client unavailable",
+        .details = "",
+    });
 
-        if (_backendClient.GetTargetServer() == "custom_channel") {
-            _backendClient.SetAuthToken(entry.authToken);
-            res = _backendClient.DeleteUser(entry.userId);
-        } else {
-            Grpc::BackendClient deleteClient(server, entry.authToken);
-            res = deleteClient.DeleteUser(entry.userId);
-        }
+    if (_backendClient.GetTargetServer() == "custom_channel") {
+        _backendClient.SetAuthToken(entry.authToken);
+        res = _backendClient.DeleteUser(entry.userId);
+    } else {
+        Grpc::BackendClient deleteClient(server, entry.authToken);
+        res = deleteClient.DeleteUser(entry.userId);
+    }
 
-        _screen.Post([this, server, res] {
-            _isDeletingProject = false;
-            if (res.HasValue()) {
-                _configManager.RemoveProject(server);
-                _projectModalError.clear();
-                _state = Reducer::Reduce(
-                    _state,
-                    State::ShowToastAction{
-                        .message = "Project '" + server +
-                                   "' deleted and user removed from server.",
-                        .severity = State::ToastSeverity::Success,
-                    });
-            } else if (res.Error().code ==
-                           Common::AppErrorCode::UNAUTHENTICATED ||
-                       res.Error().code == Common::AppErrorCode::NOT_FOUND) {
-                _configManager.RemoveProject(server);
-                _projectModalError.clear();
-                _state = Reducer::Reduce(
-                    _state,
-                    State::ShowToastAction{
+    co_await _executor.Ui();
+    if (_executor.IsStopped()) {
+        _isDeletingProject = false;
+        co_return;
+    }
+
+    _isDeletingProject = false;
+    if (res.HasValue()) {
+        _configManager.RemoveProject(server);
+        _projectModalError.clear();
+        _state = Reducer::Reduce(
+            _state,
+            State::ShowToastAction{
+                .message = "Project '" + server +
+                           "' deleted and user removed from server.",
+                .severity = State::ToastSeverity::Success,
+            });
+    } else if (res.Error().code == Common::AppErrorCode::UNAUTHENTICATED ||
+               res.Error().code == Common::AppErrorCode::NOT_FOUND) {
+        _configManager.RemoveProject(server);
+        _projectModalError.clear();
+        _state = Reducer::Reduce(
+            _state, State::ShowToastAction{
                         .message = "Project '" + server +
                                    "' removed (user inactive on server).",
                         .severity = State::ToastSeverity::Info,
                     });
-            } else {
-                _projectModalError =
-                    "Failed to delete user from server: " + res.Error().message;
-                _state = Reducer::Reduce(
-                    _state, State::ShowToastAction{
-                                .message = _projectModalError,
-                                .severity = State::ToastSeverity::Error,
-                            });
-            }
-        });
-        _screen.PostEvent(Event::Custom);
-    });
+    } else {
+        _projectModalError =
+            "Failed to delete user from server: " + res.Error().message;
+        _state = Reducer::Reduce(_state,
+                                 State::ShowToastAction{
+                                     .message = _projectModalError,
+                                     .severity = State::ToastSeverity::Error,
+                                 });
+    }
 }
 
-void MainScreen::HandleAuthSubmit(const std::string& server,
-                                  const std::string& name,
-                                  const std::string& inviteKey) {
-
-    ++_sessionGeneration;
+Common::DetachedTask MainScreen::HandleAuthSubmit(std::string server,
+                                                   std::string name,
+                                                   std::string inviteKey) {
+    const auto generation = ++_sessionGeneration;
     if (_healthChecker) {
         _healthChecker->Stop();
     }
@@ -537,9 +513,20 @@ void MainScreen::HandleAuthSubmit(const std::string& server,
         _eventSubscriber->Stop();
     }
 
+    co_await _executor.Background();
+    if (_executor.IsStopped() || generation != _sessionGeneration.load()) {
+        co_return;
+    }
+
     _backendClient.SetTargetServer(server);
     _backendClient.SetAuthToken("");
     auto res = _backendClient.AddUser(name, inviteKey);
+
+    co_await _executor.Ui();
+    if (_executor.IsStopped() || generation != _sessionGeneration.load()) {
+        co_return;
+    }
+
     if (res.HasValue()) {
         auto user = res.Value();
         _configManager.SaveProjectSession(server, user.id(), user.name(),
@@ -579,15 +566,15 @@ Component MainScreen::BuildLayout() {
 
     auto taskBoard = Views::CreateTaskBoardView(
         _state, [this](const State::Action& a) { Dispatch(a); },
-        _backendClient);
+        _backendClient, &_executor);
 
     auto reviewView = Views::CreateReviewView(
         _state, [this](const State::Action& a) { Dispatch(a); },
-        _backendClient);
+        _backendClient, &_executor);
 
     auto createTaskView = Views::CreateCreateTaskView(
         _state, [this](const State::Action& a) { Dispatch(a); },
-        _backendClient);
+        _backendClient, &_executor);
 
     auto tabWorkspace = Container::Tab({taskBoard, reviewView, createTaskView},
                                        &_activeTabIndex);

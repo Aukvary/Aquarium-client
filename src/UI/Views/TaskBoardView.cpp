@@ -1,12 +1,14 @@
-#include "TaskBoardView.hpp"
+#include "./TaskBoardView.hpp"
 
-#include "Common/TimeUtils.hpp"
 #include "UI/Components/RemarksPane.hpp"
 #include "UI/Components/TaskDetailsPane.hpp"
 #include "UI/UIHelpers.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <Common/TimeUtils.hpp>
+#include <cstdint>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -52,7 +54,6 @@ public:
     }
 
     Element Render() override {
-        // If state modified query externally, keep local query in sync
         if (_lastQuery == *_query && *_query != _state.filter.searchQuery) {
             *_query = _state.filter.searchQuery;
             _lastQuery = *_query;
@@ -80,18 +81,39 @@ private:
 
 Component
 CreateTaskBoardView(const State::AppState& state,
-                    std::function<void(const State::Action&)> dispatch,
-                    Grpc::BackendClient& client) {
+                    const std::function<void(const State::Action&)>& dispatch,
+                    Grpc::BackendClient& client,
+                    Common::CoroutineExecutor* executor) {
     auto searchQuery = std::make_shared<std::string>(state.filter.searchQuery);
+    auto commentFetchSeq = std::make_shared<std::atomic<std::uint64_t>>(0);
 
-    auto selectTaskAndFetchComments = [dispatch, &client](std::int64_t taskId) {
+    auto selectTaskAndFetchComments =
+        [dispatch, &client, executor,
+         commentFetchSeq](std::int64_t taskId) -> Common::DetachedTask {
         dispatch(State::SelectTaskAction{taskId});
+        if (!client.HasChannel()) {
+            co_return;
+        }
+        const auto seq =
+            commentFetchSeq->fetch_add(1, std::memory_order_acq_rel) + 1;
+        dispatch(State::SetLoadingCommentsAction{true});
+        co_await Common::ResumeBackground(executor);
+        if ((executor != nullptr && executor->IsStopped()) ||
+            seq != commentFetchSeq->load(std::memory_order_acquire)) {
+            co_return;
+        }
         auto commentsRes = client.GetComments(taskId);
+        if ((executor != nullptr && executor->IsStopped()) ||
+            seq != commentFetchSeq->load(std::memory_order_acquire)) {
+            co_return;
+        }
         if (commentsRes.HasValue()) {
             dispatch(State::CommentsLoadedAction{
                 .taskId = taskId,
-                .comments = commentsRes.Value(),
+                .comments = std::move(commentsRes.Value()),
             });
+        } else {
+            dispatch(State::SetLoadingCommentsAction{false});
         }
     };
 
@@ -109,7 +131,6 @@ CreateTaskBoardView(const State::AppState& state,
     }
     auto filterBar = Container::Horizontal(std::move(filterButtons));
 
-    // Search Field
     InputOption searchOpt;
     searchOpt.multiline = false;
     searchOpt.on_change = [dispatch, searchQuery] {
@@ -124,9 +145,18 @@ CreateTaskBoardView(const State::AppState& state,
     auto searchField =
         Make<SearchInputWrapper>(rawSearchField, searchQuery, state, dispatch);
 
-    auto updateTaskStatus = [dispatch, &client](std::int64_t taskId,
-                                                TaskStatus targetStatus) {
+    auto updateTaskStatus =
+        [dispatch, &client,
+         executor](std::int64_t taskId,
+                   TaskStatus targetStatus) -> Common::DetachedTask {
+        co_await Common::ResumeBackground(executor);
+        if (executor != nullptr && executor->IsStopped()) {
+            co_return;
+        }
         auto res = client.UpdateTaskStatus(taskId, targetStatus);
+        if (executor != nullptr && executor->IsStopped()) {
+            co_return;
+        }
         if (res.HasValue()) {
             const auto updatedStatus = res.Value().status();
             dispatch(State::TaskUpdatedAction{res.Value()});
@@ -161,85 +191,104 @@ CreateTaskBoardView(const State::AppState& state,
                                               : TaskStatus::ARCHIVE;
                 updateTaskStatus(taskId, targetStatus);
             },
-        .onAssignWorker =
-            [&state, dispatch, &client](std::int64_t taskId) {
-                if (state.session.userId == 0) {
-                    dispatch(State::ShowToastAction{
-                        .message = "Cannot assign: unauthenticated user.",
-                        .severity = State::ToastSeverity::Warning,
-                    });
-                    return;
-                }
-                auto res = client.AssignWorker(taskId, state.session.userId);
-                if (res.HasValue()) {
-                    dispatch(State::TaskUpdatedAction{res.Value()});
-                    dispatch(State::ShowToastAction{
-                        .message =
-                            "Assigned you to task #" + std::to_string(taskId),
-                        .severity = State::ToastSeverity::Success,
-                    });
-                } else {
-                    dispatch(State::ShowToastAction{
-                        .message = res.Error().message,
-                        .severity = State::ToastSeverity::Error,
-                    });
-                }
-            },
-        .onDeleteTask =
-            [dispatch, &client](std::int64_t taskId) {
-                auto res = client.DeleteTask(taskId);
-                if (res.HasValue()) {
-                    dispatch(State::TaskDeletedAction{taskId});
-                    dispatch(State::ShowToastAction{
-                        .message =
-                            "Task #" + std::to_string(taskId) + " deleted.",
-                        .severity = State::ToastSeverity::Info,
-                    });
-                } else {
-                    dispatch(State::ShowToastAction{
-                        .message = res.Error().message,
-                        .severity = State::ToastSeverity::Error,
-                    });
-                }
-            },
+        .onAssignWorker = [&state, dispatch, &client, executor](
+                              std::int64_t taskId) -> Common::DetachedTask {
+            const auto userId = state.session.userId;
+            if (userId == 0) {
+                dispatch(State::ShowToastAction{
+                    .message = "Cannot assign: unauthenticated user.",
+                    .severity = State::ToastSeverity::Warning,
+                });
+                co_return;
+            }
+            co_await Common::ResumeBackground(executor);
+            if (executor != nullptr && executor->IsStopped()) {
+                co_return;
+            }
+            auto res = client.AssignWorker(taskId, userId);
+            if (executor != nullptr && executor->IsStopped()) {
+                co_return;
+            }
+            if (res.HasValue()) {
+                dispatch(State::TaskUpdatedAction{res.Value()});
+                dispatch(State::ShowToastAction{
+                    .message =
+                        "Assigned you to task #" + std::to_string(taskId),
+                    .severity = State::ToastSeverity::Success,
+                });
+            } else {
+                dispatch(State::ShowToastAction{
+                    .message = res.Error().message,
+                    .severity = State::ToastSeverity::Error,
+                });
+            }
+        },
+        .onDeleteTask = [dispatch, &client, executor](
+                            std::int64_t taskId) -> Common::DetachedTask {
+            co_await Common::ResumeBackground(executor);
+            if (executor != nullptr && executor->IsStopped()) {
+                co_return;
+            }
+            auto res = client.DeleteTask(taskId);
+            if (executor != nullptr && executor->IsStopped()) {
+                co_return;
+            }
+            if (res.HasValue()) {
+                dispatch(State::TaskDeletedAction{taskId});
+                dispatch(State::ShowToastAction{
+                    .message = "Task #" + std::to_string(taskId) + " deleted.",
+                    .severity = State::ToastSeverity::Info,
+                });
+            } else {
+                dispatch(State::ShowToastAction{
+                    .message = res.Error().message,
+                    .severity = State::ToastSeverity::Error,
+                });
+            }
+        },
     };
     auto detailsPane =
         Components::CreateTaskDetailsPane(state, detailsCallbacks);
 
     Components::RemarksCallbacks remarksCallbacks{
-        .onAddComment =
-            [&state, dispatch, &client](std::int64_t taskId,
-                                        const std::string& content) {
-                auto res = client.AddComment(
-                    taskId, content,
-                    aquarium::api::CommentType::COMMENT_GENERAL,
-                    state.session.userId > 0
-                        ? std::make_optional(state.session.userId)
-                        : std::nullopt);
-                if (res.HasValue()) {
-                    dispatch(State::CommentAddedAction{res.Value()});
-                    dispatch(State::ShowToastAction{
-                        .message = "Remark posted.",
-                        .severity = State::ToastSeverity::Success,
-                    });
-                } else {
-                    dispatch(State::ShowToastAction{
-                        .message = res.Error().message,
-                        .severity = State::ToastSeverity::Error,
-                    });
-                }
-            },
+        .onAddComment = [&state, dispatch, &client, executor](
+                            std::int64_t taskId,
+                            std::string content) -> Common::DetachedTask {
+            const auto authorId = state.session.userId > 0
+                                      ? std::make_optional(state.session.userId)
+                                      : std::nullopt;
+            co_await Common::ResumeBackground(executor);
+            if (executor != nullptr && executor->IsStopped()) {
+                co_return;
+            }
+            auto res = client.AddComment(
+                taskId, content, aquarium::api::CommentType::COMMENT_GENERAL,
+                authorId);
+            if (executor != nullptr && executor->IsStopped()) {
+                co_return;
+            }
+            if (res.HasValue()) {
+                dispatch(State::CommentAddedAction{res.Value()});
+                dispatch(State::ShowToastAction{
+                    .message = "Remark posted.",
+                    .severity = State::ToastSeverity::Success,
+                });
+            } else {
+                dispatch(State::ShowToastAction{
+                    .message = res.Error().message,
+                    .severity = State::ToastSeverity::Error,
+                });
+            }
+        },
     };
     auto remarksPane = Components::CreateRemarksPane(state, remarksCallbacks);
 
-    // Left Column Renderer
     auto leftContainer =
         Container::Vertical({btnScopeToggle, filterBar, searchField});
 
     auto leftRenderer =
         Renderer(leftContainer, [&state, btnScopeToggle, filterBar, searchField,
                                  selectTaskAndFetchComments] {
-            // Render Filter Bar
             Elements filterElements;
             filterElements.reserve(kFilters.size());
             for (size_t i = 0; i < kFilters.size(); ++i) {
@@ -262,7 +311,6 @@ CreateTaskBoardView(const State::AppState& state,
                 hflow(std::move(filterElements)),
             });
 
-            // Render Task List
             auto filteredTasks = state.GetFilteredTasks();
             Elements taskRows;
             if (filteredTasks.empty()) {
@@ -325,14 +373,12 @@ CreateTaskBoardView(const State::AppState& state,
     return CatchEvent(fullLayout, [&state, dispatch, searchField, searchQuery,
                                    filterBar, remarksPane,
                                    selectTaskAndFetchComments](Event event) {
-        // Hotkey '/' focuses search field if not currently typing in an input
         if (event == Event::Character('/') && !searchField->Focused() &&
             !remarksPane->Focused()) {
             searchField->TakeFocus();
             return true;
         }
 
-        // When searchField is focused:
         if (searchField->Focused()) {
             if (event == Event::Escape) {
                 if (!searchQuery->empty()) {
@@ -346,24 +392,18 @@ CreateTaskBoardView(const State::AppState& state,
                 filterBar->TakeFocus();
                 return true;
             }
-            // Do not intercept characters (e.g. 'f', 'j', 'k') or backspace
-            // while in search
             return false;
         }
 
-        // When remarksPane is focused (typing a comment), do not intercept
-        // hotkeys
         if (remarksPane->Focused()) {
             return false;
         }
 
-        // Hotkey 'm': toggle between my tasks (worker) and all tasks
         if (event == Event::Character('m')) {
             dispatch(State::ToggleOnlyMyTasksAction{});
             return true;
         }
 
-        // Hotkey 'f': cycle filters
         if (event == Event::Character('f')) {
             size_t currentIndex = 0;
             for (size_t i = 0; i < kFilters.size(); ++i) {
@@ -377,7 +417,6 @@ CreateTaskBoardView(const State::AppState& state,
             return true;
         }
 
-        // Navigation: 'j' or Down key: select next task
         if (event == Event::Character('j') || event == Event::ArrowDown) {
             auto tasks = state.GetFilteredTasks();
             if (!tasks.empty()) {
@@ -396,7 +435,6 @@ CreateTaskBoardView(const State::AppState& state,
             }
         }
 
-        // Navigation: 'k' or Up key: select prev task
         if (event == Event::Character('k') || event == Event::ArrowUp) {
             auto tasks = state.GetFilteredTasks();
             if (!tasks.empty()) {
